@@ -1,6 +1,6 @@
 # Architecture Technique — Sécurité Convergée IoT/IA pour Bâtiments Sensibles
 
-> **Équipe :** Ryan ZERHOUNI · Alban ROBERT · Sam BOUCHET · Rania EL HADDAOUI · Ilyes BELKHIR  
+> **Réalisé par :** Ryan ZERHOUNI  
 > **Version :** 0.1 — Document de travail (avant développement)
 
 ---
@@ -49,7 +49,7 @@ Le système est organisé en **7 couches fonctionnelles** qui communiquent de fa
 └────────────────────────────┬───────────────────────────────────┘
                              │ Flux sécurisé (TLS/PQC)
 ┌────────────────────────────▼────────────────────────────────┐
-│       [4] SÉCURITÉ — TLS sans PKI · PQC (X25519MLKEM768)        │
+│       [4] SÉCURITÉ — TLS sans PKI · PQC (X25519MLKEM768)    │
 │      Tunnels hybrides · Logs inviolables · Auth mutuelle    │
 └────────────────────────────┬────────────────────────────────┘
                              │
@@ -73,7 +73,7 @@ Le système est organisé en **7 couches fonctionnelles** qui communiquent de fa
 
 ## 2. Couche IoT — Sources de données terrain (SIMULÉES)
 
-> **Contexte déploiement :** aucun matériel physique. Tous les capteurs sont émulés par un **simulateur Python** tournant sur le serveur. Chaque type de capteur est un processus (ou thread) qui génère des événements selon un modèle probabiliste configurable, publie en MQTT, et peut injecter des scénarios d'attaque à la demande.
+> **Contexte déploiement :** aucun matériel physique. Tous les capteurs sont émulés par un **simulateur Python** tournant sur la machine hôte. Chaque type de capteur est un processus (ou thread) qui génère des événements selon un modèle probabiliste configurable, publie en MQTT, et peut injecter des scénarios d'attaque à la demande.
 
 ### 2.1 Architecture du simulateur
 
@@ -138,7 +138,7 @@ building/B1/network/alert                        ← network_agent (anomalies)
 
 ## 3. Couche Protocoles & Gateway (LOGICIELLE)
 
-> **Contexte déploiement :** pas de gateway physique. Le gateway est un **service Python conteneurisé** qui joue le rôle d'intermédiaire entre le simulateur et le middleware. Dans un déploiement réel, ce service tournerait sur un Raspberry Pi ; ici il tourne dans un container Docker sur le même serveur.
+> **Contexte déploiement :** pas de gateway physique. Le gateway est un **service Python conteneurisé** qui joue le rôle d'intermédiaire entre le simulateur et le middleware. Dans un déploiement réel, ce service tournerait sur un Raspberry Pi ; ici il tourne dans un container Docker sur le même hôte.
 
 ### 3.1 Protocoles supportés
 
@@ -169,11 +169,11 @@ building/B1/network/alert                        ← network_agent (anomalies)
 
 ### 4.1 Architecture TLS sans PKI — Adaptation simulation logicielle
 
-> **Contexte déploiement :** pas de Secure Element ni de HSM physique. Les clés sont générées et stockées dans des **fichiers protégés sur le système de fichiers** du serveur (permissions restreintes, dossier chiffré). Dans un déploiement réel sur matériel, ces mêmes clés seraient gravées en SE/HSM à la fabrication. L'architecture cryptographique reste identique — seul le stockage physique change.
+> **Contexte déploiement :** pas de Secure Element ni de HSM physique. Les clés sont générées et stockées dans des **fichiers protégés sur le système de fichiers** local (permissions restreintes, dossier chiffré). Dans un déploiement réel sur matériel, ces mêmes clés seraient gravées en SE/HSM à la fabrication. L'architecture cryptographique reste identique — seul le stockage physique change.
 
 **Équivalences simulation / production :**
 
-| Élément            | Production (matériel)                  | Simulation (PC serveur)                        |
+| Élément            | Production (matériel)                  | Simulation (PC hôte)                           |
 |--------------------|----------------------------------------|------------------------------------------------|
 | Stockage clé privée| Secure Element / HSM (non extractible) | Fichier `.pem` chiffré (AES-256), permissions 600 |
 | Provisionnement    | Gravé en usine                         | Script de génération au premier démarrage      |
@@ -247,12 +247,36 @@ Vérification :
 **Choix de ML-DSA niveau 5 (ECC-hybrid-MLDSA5) :**
 ECC-hybrid-MLDSA5 offre le niveau de sécurité 5 (équivalent AES-256), le plus élevé du standard FIPS 204. Justifié ici car les logs signés doivent rester légalement incontestables sur une durée de 15 ans, pendant laquelle la puissance de calcul quantique évoluera de façon imprévisible.
 
+### 4.2.4 Optimisation des performances : Session Resumption hybride (PSK+DHE)
+
+Pour compenser l'overhead calculatoire et la taille des messages du handshake PQC complet (ML-KEM-768), le système implémente le mécanisme de **TLS 1.3 Session Resumption** en mode hybride :
+*   **Handshake Initial (Full)** : Échange de clés complet **X25519 + ML-KEM-768**. Après authentification mutuelle, un ticket de session (PSK - Pre-Shared Key) est généré.
+*   **Reconnexions (Resumption)** : Utilisation du **PSK** combiné à un échange **DHE éphémère (X25519)**.
+
+> [!IMPORTANT]
+> **Héritage de la résistance quantique** : La reprise de session ne perd pas sa sécurité PQC. Le PSK utilisé lors de la reprise est directement dérivé du secret partagé établi via ML-KEM-768 lors du handshake initial. Même si l'échange éphémère de la reconnexion est uniquement classique (X25519), le secret global reste protégé par l'entropie quantique du PSK "parent".
+
+**Bénéfices :**
+- **Performance** : Réduction de 90% de l'overhead PQC sur les reconnexions.
+- **Perfect Forward Secrecy (PFS)** : L'ajout de l'échange X25519 sur chaque reconnexion garantit que le vol physique d'un ticket de session ne permet pas de déchiffrer les sessions passées ou futures.
+
 ### 4.3 Protection des logs
 
 - **Logs inviolables :** chaque entrée est signée avec le hybride ECC-hybrid-MLDSA5 → toute modification est détectable, y compris par un adversaire quantique futur
 - **Chiffrement des logs au repos :** avec la clé de session issue de X25519MLKEM768 → protégés contre le "harvest now, decrypt later"
 - **Horodatage qualifié :** timestamp signé par une TSA (Time Stamping Authority) pour valeur légale
 - **Durée de garantie : 15 ans** — justifiée par le choix ML-DSA niveau 5 (ECC-hybrid-MLDSA5)
+
+### 4.4 Architecture de Segmentation — Double Tunnel Proxy
+
+Afin de garantir une isolation stricte et une gestion agnostique de la cryptographie, le flux entre la zone IoT et le Middleware est segmenté par un dispositif de **double proxy** agissant comme terminaisons PQC (PQC Terminations) :
+
+1.  **Forward Proxy (Côté Gateway/Edge)** : Intercepte les flux locaux (MQTT/HTTP) et les encapsule dans le tunnel TLS/PQC sortant.
+2.  **Reverse Proxy (Côté Middleware/Cloud)** : Termine le tunnel PQC, vérifie l'identité du client et redirige le trafic déchiffré vers les services internes (Mosquitto Broker, Node-RED).
+
+**Avantages stratégiques :**
+- **Agnosticisme applicatif** : Les applications (simulateur, Node-RED, Kafka) n'ont pas besoin de supporter nativement les bibliothèques PQC ; elles communiquent en clair ou via TLS classique sur des interfaces locales sécurisées.
+- **Défense en profondeur** : Le tunnel PQC agit comme une couche de transport inviolable (Post-Quantum Secure Pipe), isolée de la logique métier. Cette architecture repose sur une segmentation réseau stricte (Docker Networks isolés), garantissant que le tunnel PQC est l'unique vecteur de communication autorisé entre le périmètre IoT et le périmètre Middleware. L'isolation est renforcée par l'utilisation de réseaux internes (`internal: true`) pour les périmètres IoT et Middleware. Seul le segment de transit entre les terminaux PQC dispose d'une interface réseau exposée, réduisant la surface d'attaque globale aux seules extrémités du tunnel.
 
 ---
 
@@ -376,7 +400,7 @@ building/{building_id}/network/alert
 
 ### 6.1 Apache Kafka — Streaming temps réel
 
-**Rôle :** file de messages haute performance entre le middleware et le moteur IA.
+**Rôle :** file de messages haute performance entre le middleware et le moteur IA. Kafka s'appuie sur **Zookeeper** pour la coordination des brokers et la gestion de la configuration du cluster.
 
 **Topics Kafka :**
 
@@ -465,17 +489,17 @@ Kafka (events.enriched) + TimescaleDB
 |-------------------------|-----------------------------------------------|----------------------|
 | **Isolation Forest**    | Détection d'anomalies non supervisée          | scikit-learn         |
 | **LSTM / Time Series**  | Modélisation des séquences d'accès temporels  | PyTorch / Keras      |
-| **Rule-based engine**   | Règles déterministes (porte forcée = CRITICAL)| Python / n8n         |
+| **Rule-based engine**   | Règles déterministes (porte forcée = CRITICAL)| Python / Node-RED    |
 | **Fusion scorer**       | Combinaison scores physique + cyber           | Python (poids appris)|
 
 ### 7.3 Score de risque dynamique
 
 **Formule de fusion (à affiner) :**
 ```
-score_final = w1 × score_physique + w2 × score_cyber + w3 × score_corrélation
+score_final = min(1.0, w1 × score_physique + w2 × score_cyber + w3 × score_corrélation)
 ```
-- `w1, w2, w3` : poids appris par validation croisée
-- Si `correlated_events` non vide : malus supplémentaire (+0.2)
+- `w1, w2, w3` : poids appris par validation croisée (ex: $w3 = 0.2$)
+- `score_corrélation` : variable binaire (1 si `correlated_events` est non vide, 0 sinon)
 
 **Classification :**
 ```
@@ -536,7 +560,7 @@ WS   /ws/events                         (stream temps réel)
 09:02:14  Badge #1042 scanné → Porte A3 (zone serveurs)
           → MQTT: building/B1/zone/Z3/badge/R07
           → Gateway: format unifié JSON
-          → Middleware n8n: normalisation, enrichissement user "alice@corp"
+          → Middleware Node-RED: normalisation, enrichissement user "alice@corp"
           → Kafka topic events.raw
           → IA: profil alice = accès Z3 attendu 8h-18h, score physique = 0.05
           → Score réseau : trafic alice normal, score cyber = 0.03
@@ -550,7 +574,7 @@ WS   /ws/events                         (stream temps réel)
 ```
 03:17:42  Porte B2 (zone data center) ouverte sans badge associé
           → Door sensor: state=FORCED, no_badge_in_window=true
-          → Score physique partiel: 0.65 → SUSPECT
+          → Score physique partiel: 0.80 → CRITICAL
 
 03:17:45  Trafic réseau inhabituel depuis l'IP caméra B2-CAM-01
           → Scan de ports internes détecté
@@ -558,7 +582,7 @@ WS   /ws/events                         (stream temps réel)
 
 03:17:47  Corrélation: même zone B2, fenêtre temporelle 3s
           → malus corrélation: +0.20
-          → Score final: min(1.0, 0.65×0.4 + 0.80×0.4 + 0.20) = 0.98
+          → Score final: min(1.0, 0.80×0.5 + 0.80×0.5 + 0.20) = 1.0
           → CRITICAL
 
           → Kafka topic alerts.critical
@@ -571,7 +595,7 @@ WS   /ws/events                         (stream temps réel)
 
 ## 10. Stack Technologique
 
-> **Infrastructure :** tout tourne sur **un seul PC (serveur gaming)** via **Docker Compose**. Chaque composant est un container isolé. Les communications inter-containers passent par le réseau Docker interne ; TLS est appliqué même en local pour valider l'implémentation crypto dans des conditions réalistes.
+> **Infrastructure :** tout tourne sur **un seul PC** via **Docker Compose**. Chaque composant est un container isolé. Les communications inter-containers passent par le réseau Docker interne ; TLS est appliqué même en local pour valider l'implémentation crypto dans des conditions réalistes.
 
 ### Configuration matérielle cible
 
@@ -579,8 +603,8 @@ WS   /ws/events                         (stream temps réel)
 |-----------|--------------------|-----------------------------------------|
 | CPU       | 8 cœurs            | Kafka, IA (Isolation Forest), Node-RED  |
 | RAM       | 16 Go              | Kafka + TimescaleDB + tous les services |
-| Stockage  | 50 Go SSD          | Logs TimescaleDB (séries temporelles)   |
-| OS        | Ubuntu 22.04 LTS   | Docker Engine stable                    |
+| Stockage  | 20 Go SSD          | Logs TimescaleDB (séries temporelles)   |
+| OS        | Windows 11 / macOS (ARM) | Docker Desktop (Engine 24+)             |
 
 ### Services Docker Compose
 
@@ -624,33 +648,40 @@ networks:
 
 ## 11. Modèle de données
 
-### Entités principales
+### 11.1 Entités Métadonnées (Relationnel - Stockage standard)
 
 ```
-User ──────────┐
-  user_id       │  1:N
-  name          ├──── BadgeEvent
-  clearance_lvl │       event_id
-  typical_zones │       user_id (FK)
-                │       door_id (FK)
-                │       timestamp
-Door ──────────┤       access_result
-  door_id       │
-  zone_id (FK)  │  1:N
-  type          ├──── DoorEvent
-                │       event_id
-Zone ──────────┤       door_id (FK)
-  zone_id       │       state
-  building_id   │       timestamp
-  risk_level    │
-                │  1:N
-Device ────────┴──── DeviceEvent
-  device_id             event_id
-  zone_id (FK)          device_id (FK)
-  type                  payload
-  status                timestamp
-  last_seen
+[ Référentiel Statique ]              [ Flux d'Événements (Hypertable) ]
+
+User ──────────┐                      ┌──────────────────────────────────┐
+  user_id (PK)  │                      │          TABLE : events          │
+  name          │       1:N            │   (Normalisation unifiée)        │
+  clearance_lvl ├──────────────────────┤                                  │
+  typical_zones │                      │  event_id (UUID)                 │
+                │                      │  timestamp (TIMESTAMPTZ)         │
+Zone ───────────┤                      │  event_type (ENUM)               │
+  zone_id (PK)  │       1:N            │  source_layer (PHYS/CYBER)       │
+  building_id   ├──────────────────────┤  building_id                     │
+  risk_level    │                      │  zone_id (FK -> Zone)            │
+                │                      │  device_id (FK -> Device)        │
+Device ─────────┤                      │  user_id (FK -> User)            │
+  device_id (PK)│                      │  ai_score (FLOAT)                │
+  zone_id (FK)  │       1:N            │  ai_class (ENUM)                 │
+  type          ├──────────────────────┤  payload (JSONB)                 │
+  status        │                      │  signature (BYTEA)               │
+                │                      └──────────────────────────────────┘
+Door ───────────┘                       ▲
+  door_id (PK)                          │
+  zone_id (FK)  ─────── 1:N ────────────┘
+  type
 ```
+
+### 11.2 Détails des relations
+
+- **Jointures IA** : Le moteur IA consomme la table `events` et fait des jointures avec `User` pour comparer l'événement actuel aux `typical_zones` et `typical_hours`.
+- **Richesse du Payload** : Les données spécifiques (ex: `state` d'une porte, `access_result` d'un badge) sont stockées dans le champ `JSONB` pour garder une table principale flexible.
+- **Partitionnement temporel (Hypertables)** : Pour maintenir des hautes performances sur 15 ans, le stockage utilise le mécanisme d'hypertables. Contrairement à une table classique qui sature avec le volume, les données sont ici découpées en **partitions physiques autonomes ("chunks")** sur le disque dur. Chaque chunk représente une fenêtre temporelle (ex: 7 jours). 
+  - *Bénéfice technique* : Lors d'une requête, le moteur de base de données cible uniquement les fichiers concernés (exclusion de partition), ce qui limite les entrées/sorties disque (I/O). Cela garantit que les index restent "chauds" (en RAM) et permet une suppression instantanée des données obsolètes par simple drop de fichier, sans fragmentation de la base.
 
 ---
 
@@ -659,10 +690,10 @@ Device ────────┴──── DeviceEvent
 | Scénario                            | Signaux détectés                              | Score attendu | Réponse système             |
 |-------------------------------------|-----------------------------------------------|---------------|-----------------------------|
 | Accès badge hors horaires           | Badge hors plage autorisée                    | 0.55 SUSPECT  | Alerte SOC niveau 2         |
-| Porte forcée (sans badge)           | Door FORCED + no badge                        | 0.75 CRITICAL | Alerte immédiate            |
+| Porte forcée (sans badge)           | Door FORCED + no badge                        | 0.80 CRITICAL | Alerte immédiate            |
 | Tailgating (2 personnes, 1 badge)   | Motion > 1 personne + 1 badge                 | 0.60 SUSPECT  | Alerte + vérification caméra|
 | Badge révoqué utilisé               | Badge DENIED + tentative répétée              | 0.80 CRITICAL | Alerte + log légal          |
-| Intrusion physique + scan réseau    | Door + mouvement + trafic anormal             | 0.95 CRITICAL | Alerte + isolation VLAN     |
+| Intrusion physique + scan réseau    | Door + mouvement + trafic anormal             | 1.0 CRITICAL  | Alerte + isolation VLAN     |
 | Compromission caméra IoT            | Trafic anormal depuis IP caméra               | 0.70 CRITICAL | Isolation device + alerte   |
 | Vol de credentials réseau après accès physique | Badge OK + trafic exfiltration post-accès | 0.85 CRITICAL | Alerte corrélée             |
 
@@ -672,8 +703,8 @@ Device ────────┴──── DeviceEvent
 
 ### Points ouverts (à décider en équipe)
 
-- [x] **Simulation vs matériel réel :** tout simulé sur PC gaming — simulateur Python multi-agents ✓
-- [x] **Déploiement :** Docker Compose sur PC serveur unique ✓
+- [x] **Simulation vs matériel réel :** tout simulé sur PC  — simulateur Python multi-agents ✓
+- [x] **Déploiement :** Docker Compose sur PC unique (Windows/Mac) ✓
 - [ ] **Modèle IA :** Isolation Forest en v1 → LSTM en v2 si temps disponible
 - [ ] **Implémentation PQC :** `liboqs` + `oqs-python` — X25519MLKEM768 + ECC-hybrid-MLDSA5 → **périmètre Ryan**
 - [ ] **Stockage clés (simulation) :** fichiers `.pem` chiffrés AES-256 avec passphrase → à définir par Ryan
@@ -684,11 +715,11 @@ Device ────────┴──── DeviceEvent
 
 | Risque                              | Probabilité | Impact | Mitigation                                        |
 |-------------------------------------|-------------|--------|---------------------------------------------------|
-| Latence > 1s end-to-end             | Faible      | Élevé  | Tout sur le même PC → réseau Docker interne rapide|
+| Latence > 1s end-to-end             | Faible      | Élevé  | Tout sur le même PC → réseau Docker interne rapide. Le **Session Resumption (PSK+DHE)** réduit l'overhead PQC de 90% après le 1er handshake.|
 | Faux positifs trop élevés           | Élevée      | Moyen  | Calibration seuils + feedback opérateur           |
 | Dérive du modèle IA                 | Moyenne     | Élevé  | Réentraînement automatique + alertes métriques    |
 | Saturation RAM (Kafka + TimescaleDB)| Moyenne     | Élevé  | Limites Docker par container, monitoring Grafana  |
-| Complexité Docker Compose (10+ svc) | Moyenne     | Moyen  | Scripts de démarrage, healthchecks configurés     |
+| Complexité Docker Compose (10+ services) | Moyenne     | Moyen  | Scripts de démarrage, healthchecks configurés     |
 
 ---
 
@@ -717,7 +748,7 @@ iot-security/
 ├── ai-engine/                     ← couche 7 : moteur IA
 │   ├── models/                   ← modèles entraînés sérialisés
 │   ├── training/                 ← scripts d'entraînement Isolation Forest
-│   └── scoring_service.py        ← API de scoring (consomme Kafka)
+│   └── scoring_service.py        ← Moteur d'analyse temps réel (Consommateur Kafka)
 ├── backend/                       ← couche 8 : API FastAPI
 │   └── app/
 ├── frontend/                      ← couche 8 : dashboard React
@@ -734,4 +765,31 @@ iot-security/
 
 ---
 
-*Document à valider collectivement avant le début du développement.*
+## 14. Estimation de la charge de travail (Workload)
+
+Une estimation de la répartition du temps de développement par grand pôle technique :
+
+| Thème de travail                     | Charge (%) | Description                                                                 |
+|--------------------------------------|------------|-----------------------------------------------------------------------------|
+| **Sécurité & Cryptographie PQC**      | 30%        | Handshake hybride, Session Resumption PSK+DHE, Double Proxy Terminations.   |
+| **Architecture Réseau & Docker**      | 15%        | Segmentation par Docker Networks isolés (internal:true), orchestration.     |
+| **Moteur IA & Scoring**               | 15%        | Feature engineering, Isolation Forest, logique de fusion des scores.        |
+| **Middleware & Pipeline Kafka**       | 15%        | Configuration Kafka, flows Node-RED, normalisation unifiée.                |
+| **Dashboard SOC & Visualisation**     | 15%        | Interface React, WebSockets temps réel, cartographie des alertes.          |
+| **Simulation IoT & Scénarios**        | 10%        | Développement des agents Python et des scripts d'injection d'attaques.      |
+
+---
+
+## 15. Répartition des rôles et responsabilités
+
+| Membre de l'équipe | Rôle principal | Missions clés | Charge (%) |
+| :--- | :--- | :--- | :--- |
+| **Ryan ZERHOUNI** | **Lead Sécurité & PQC** | Handshake hybride, Session Resumption, Double Proxy, signature PQC. | 30% |
+| **(À définir)** | **Expert IA & Scoring** | Feature engineering, modèle Isolation Forest et fusion des scores. | 15% |
+| **(À définir)** | **Lead Infra & Simulation**| Orchestration Docker, isolation réseaux (`internal: true`), simulateur. | 25% |
+| **(À définir)** | **Data Engineer** | Flows Node-RED, normalisation Unified Schema et Kafka. | 15% |
+| **(À définir)** | **Lead Frontend & SOC** | Dashboard React, WebSockets temps réel et cartographie SOC. | 15% |
+
+---
+
+*Document mis à jour le 22/04/2026 — A valider par l'équipe, proposition faites par Ryan ZERHOUNI.*
