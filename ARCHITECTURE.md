@@ -43,26 +43,26 @@ Le système est organisé en **7 couches fonctionnelles** qui communiquent de fa
 │              File d'événements · Historique · Logs          │
 └────────────────────────────┬────────────────────────────────┘
                              │ Données normalisées
-┌────────────────────────────▼────────────────────────────────┐
-│       [5] MIDDLEWARE — Node-RED · Mosquitto MQTT Broker      │
-│         Agrégation · Normalisation · Corrélation physique/cyber │
-└────────────────────────────┬────────────────────────────────┘
+┌────────────────────────────▼───────────────────────────────────┐
+│       [5] MIDDLEWARE — Node-RED · Mosquitto MQTT Broker        │
+│         Agrégation · Normalisation · Corrélation physique/cyber│
+└────────────────────────────┬───────────────────────────────────┘
                              │ Flux sécurisé (TLS/PQC)
 ┌────────────────────────────▼────────────────────────────────┐
-│       [4] SÉCURITÉ — TLS sans PKI · PQC (ML-KEM 768)       │
+│       [4] SÉCURITÉ — TLS sans PKI · PQC (X25519MLKEM768)        │
 │      Tunnels hybrides · Logs inviolables · Auth mutuelle    │
 └────────────────────────────┬────────────────────────────────┘
                              │
 ┌────────────────────────────▼────────────────────────────────┐
 │           [3] GATEWAY / EDGE — Collecte locale              │
 │         Filtrage · Pre-processing · Buffer offline          │
-└──────┬──────────┬──────────┬──────────┬─────────────────────┘
-       │ MQTT     │ HTTP     │ CoAP     │ Zigbee/propriétaire
-┌──────▼──────────▼──────────▼──────────▼─────────────────────┐
-│              [2] PROTOCOLES DE COMMUNICATION                 │
+└──────┬────────────────────-──────────┬──────────────────────┘
+       │ MQTT                          │ HTTP
+┌──────▼──────────────────────────────-▼──────────────────────┐
+│              [2] PROTOCOLES DE COMMUNICATION                │
 └──────┬──────────┬──────────┬──────────┬─────────────────────┘
        │          │          │          │
-┌──────▼──┐ ┌────▼────┐ ┌───▼───┐ ┌────▼──────────────────────┐
+┌──────▼──┐ ┌─────▼───┐ ┌───▼───┐ ┌─────▼─────────────────────┐
 │Lecteurs │ │Capteurs │ │Detect.│ │Caméras & capteurs env.    │
 │ badges  │ │portes   │ │mouvt. │ │(temp, humidité, vidéo)    │
 └─────────┘ └─────────┘ └───────┘ └───────────────────────────┘
@@ -146,7 +146,6 @@ building/B1/network/alert                        ← network_agent (anomalies)
 |-----------|---------------------------------------|----------------------|
 | **MQTT**  | Communication simulateur → gateway    | `paho-mqtt`          |
 | **HTTP**  | API REST gateway → middleware         | `httpx` / `FastAPI`  |
-| **CoAP**  | Simulé si nécessaire pour la démo     | `aiocoap`            |
 
 ### 3.2 Gateway logiciel — responsabilités
 
@@ -185,19 +184,15 @@ building/B1/network/alert                        ← network_agent (anomalies)
 ```
 security/
 ├── ca/
-│   └── ca.crt                  ← certificat racine auto-signé (simulation PKI minimale)
+│   ├── ca.crt                  ← certificat racine (hybride ECC-hybrid-MLDSA5)
+│   └── ca.key                  ← clé privée racine (hybride, chiffrée)
 ├── gateway/
-│   ├── gateway.crt             ← certificat du gateway logiciel
-│   └── gateway.key             ← clé privée (chiffrée, perm. 600)
+│   ├── gateway.crt             ← certificat d'identité du gateway logiciel
+│   └── gateway.key             ← clé privée hybride (ECC-hybrid-MLDSA5, perm. 600)
 ├── middleware/
-│   ├── middleware.crt
-│   └── middleware.key
-├── allowlist.json              ← liste des certificats autorisés
-└── pqc/
-    ├── mlkem768_pub.key        ← clé publique ML-KEM-768
-    ├── mlkem768_priv.key       ← clé privée ML-KEM-768 (chiffrée)
-    ├── mldsa87_pub.key         ← clé publique ML-DSA-87
-    └── mldsa87_priv.key        ← clé privée ML-DSA-87 (chiffrée)
+│   ├── middleware.crt          ← certificat d'identité du middleware
+│   └── middleware.key          ← clé privée hybride (ECC-hybrid-MLDSA5)
+└── allowlist.json              ← liste des certificats autorisés (mTLS sans PKI)
 ```
 
 **Flux d'authentification mutuelle (inchangé vs production) :**
@@ -212,7 +207,7 @@ security/
 | Fonction              | Algorithme hybride retenu          | Détail                                                                 | Standard NIST       |
 |-----------------------|------------------------------------|------------------------------------------------------------------------|---------------------|
 | Échange de clés (KEM) | **X25519MLKEM768**                 | X25519 (ECDH classique) + ML-KEM-768 (Kyber niveau 3, 192-bit sec.)   | FIPS 203 + RFC 8422 |
-| Authentification / Signature | **ECC + ML-DSA-87**        | ECDSA P-384 (classique) + ML-DSA niveau 5 (256-bit sec. équiv. AES-256) | FIPS 204            |
+| Authentification / Signature | **ECC-hybrid-MLDSA5**      | ECDSA P-384 (classique) + ML-DSA niveau 5 (256-bit sec. équiv. AES-256) | FIPS 204            |
 | Hash / intégrité      | **SHA-3 / SHAKE-256**              | Résistant quantique nativement (construction sponge)                  | FIPS 202            |
 
 **Principe du tunnel hybride X25519MLKEM768 :**
@@ -238,26 +233,26 @@ Client (Gateway)                          Serveur (Middleware)
       │══ Session TLS 1.3 chiffrée (AES-256-GCM) ══════════│
 ```
 
-**Principe du hybride ECC + ML-DSA-87 pour la signature :**
+**Principe du hybride ECC-hybrid-MLDSA5 pour la signature :**
 
 ```
 Signature d'un log ou d'un certificat :
-  sig_final = (sig_ECDSA_P384 ║ sig_MLDSA87)
+  sig_final = (sig_ECDSA_P384 ║ sig_MLDSA5)
 
 Vérification :
-  valide si ET SEULEMENT SI sig_ECDSA_P384 ET sig_MLDSA87 sont tous les deux valides
+  valide si ET SEULEMENT SI sig_ECDSA_P384 ET sig_MLDSA5 sont tous les deux valides
   → double signature → sécurité maximale sur 15 ans face aux menaces quantiques
 ```
 
-**Choix de ML-DSA niveau 5 (et pas 3) :**
-ML-DSA-87 offre le niveau de sécurité 5 (équivalent AES-256), le plus élevé du standard FIPS 204. Justifié ici car les logs signés doivent rester légalement incontestables sur une durée de 15 ans, pendant laquelle la puissance de calcul quantique évoluera de façon imprévisible.
+**Choix de ML-DSA niveau 5 (ECC-hybrid-MLDSA5) :**
+ECC-hybrid-MLDSA5 offre le niveau de sécurité 5 (équivalent AES-256), le plus élevé du standard FIPS 204. Justifié ici car les logs signés doivent rester légalement incontestables sur une durée de 15 ans, pendant laquelle la puissance de calcul quantique évoluera de façon imprévisible.
 
 ### 4.3 Protection des logs
 
-- **Logs inviolables :** chaque entrée est signée avec le hybride ECC + ML-DSA-87 → toute modification est détectable, y compris par un adversaire quantique futur
+- **Logs inviolables :** chaque entrée est signée avec le hybride ECC-hybrid-MLDSA5 → toute modification est détectable, y compris par un adversaire quantique futur
 - **Chiffrement des logs au repos :** avec la clé de session issue de X25519MLKEM768 → protégés contre le "harvest now, decrypt later"
 - **Horodatage qualifié :** timestamp signé par une TSA (Time Stamping Authority) pour valeur légale
-- **Durée de garantie : 15 ans** — justifiée par le choix ML-DSA niveau 5 (sécurité équivalente AES-256)
+- **Durée de garantie : 15 ans** — justifiée par le choix ML-DSA niveau 5 (ECC-hybrid-MLDSA5)
 
 ---
 
@@ -546,7 +541,7 @@ WS   /ws/events                         (stream temps réel)
           → IA: profil alice = accès Z3 attendu 8h-18h, score physique = 0.05
           → Score réseau : trafic alice normal, score cyber = 0.03
           → Score final = 0.04 → NORMAL
-          → TimescaleDB: log signé (ECC + ML-DSA-87)
+          → TimescaleDB: log signé (ECC-hybrid-MLDSA5)
           → Dashboard: mise à jour statut zone Z3 (vert)
 ```
 
@@ -569,7 +564,7 @@ WS   /ws/events                         (stream temps réel)
           → Kafka topic alerts.critical
           → Notification SOC (SMS + dashboard rouge)
           → Action automatique possible: verrouillage porte B2, isolation VLAN caméra
-          → Log signé (ECC + ML-DSA-87) archivé dans TimescaleDB
+          → Log signé (ECC-hybrid-MLDSA5) archivé dans TimescaleDB
 ```
 
 ---
@@ -616,7 +611,7 @@ networks:
 | Simulation IoT   | Agents Python           | Python 3.12             | Génération d'événements (badges, portes…)   |
 | Protocoles       | Mosquitto 2.x           | C                       | Broker MQTT                                 |
 | Gateway          | Service Python asyncio  | Python 3.12             | Validation, buffer, publication MQTT        |
-| Sécurité TLS/PQC | OpenSSL 3.x + liboqs + oqs-python | Python 3.12 | TLS 1.3 + X25519MLKEM768 + ECC/ML-DSA-87   |
+| Sécurité TLS/PQC | OpenSSL 3.x + liboqs + oqs-python | Python 3.12 | TLS 1.3 + X25519MLKEM768 + ECC-hybrid-MLDSA5   |
 | Middleware       | Node-RED (self-hosted)  | Node.js 20              | Orchestration des flows IoT                 |
 | Streaming        | Apache Kafka            | JVM                     | File de messages inter-services             |
 | Stockage         | TimescaleDB             | PostgreSQL 16           | Séries temporelles + logs signés            |
@@ -680,10 +675,10 @@ Device ────────┴──── DeviceEvent
 - [x] **Simulation vs matériel réel :** tout simulé sur PC gaming — simulateur Python multi-agents ✓
 - [x] **Déploiement :** Docker Compose sur PC serveur unique ✓
 - [ ] **Modèle IA :** Isolation Forest en v1 → LSTM en v2 si temps disponible
-- [ ] **Implémentation PQC :** `liboqs` + `oqs-python` — X25519MLKEM768 + ECC+ML-DSA-87 → **périmètre Ryan**
+- [ ] **Implémentation PQC :** `liboqs` + `oqs-python` — X25519MLKEM768 + ECC-hybrid-MLDSA5 → **périmètre Ryan**
 - [ ] **Stockage clés (simulation) :** fichiers `.pem` chiffrés AES-256 avec passphrase → à définir par Ryan
 - [ ] **GDPR :** simulation de métadonnées uniquement, pas de vidéo réelle — problème écarté ✓
-- [ ] **Signature des certs devices :** ML-DSA-87 (cohérent avec les logs) ou ML-DSA-65 (plus léger) ? → à trancher par Ryan
+- [ ] **Signature des certs devices :** ECC-hybrid-MLDSA5 (cohérent avec les logs) ou ML-DSA-65 (plus léger) ? → à trancher par Ryan
 
 ### Risques identifiés
 
@@ -711,11 +706,12 @@ iot-security/
 ├── gateway/                       ← couche 3 : gateway logiciel
 │   └── gateway.py                ← validation, buffer, publication MQTT
 ├── security/                      ← couche 4 : TLS/PQC — périmètre Ryan
-│   ├── certs/                    ← certificats générés (gitignore les .key)
-│   ├── pqc/                      ← clés ML-KEM-768 et ML-DSA-87
-│   ├── tls_client.py             ← client TLS X25519MLKEM768
+│   ├── ca/                       ← autorité racine (hybride)
+│   ├── gateway/                  ← certificats & clés Gateway (hybride)
+│   ├── middleware/               ← certificats & clés Middleware (hybride)
+│   ├── tls_client.py             ← client TLS (X25519MLKEM768)
 │   ├── tls_server.py             ← serveur TLS
-│   └── log_signer.py             ← signature ECC + ML-DSA-87 des logs
+│   └── log_signer.py             ← signature ECC-hybrid-MLDSA5 des logs
 ├── middleware/                    ← couche 5 : Node-RED flows
 │   └── flows/                    ← fichiers flows.json exportés Node-RED
 ├── ai-engine/                     ← couche 7 : moteur IA
