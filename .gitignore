@@ -51,3 +51,6 @@ node_modules/
 .pytest_cache/
 htmlcov/
 .coverage
+
+
+.gitignore
