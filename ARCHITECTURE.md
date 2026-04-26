@@ -182,17 +182,27 @@ building/B1/network/alert                        ← network_agent (anomalies)
 
 **Key file structure (simulation):**
 ```
-security/
+security/                              ← PQC identity & signing (Rania's scope)
 ├── ca/
 │   ├── ca.crt                  ← root certificate (hybrid ECC-hybrid-MLDSA5)
-│   └── ca.key                  ← root private key (hybrid, encrypted)
+│   └── ca.key                  ← root private key (hybrid, encrypted AES-256)
 ├── gateway/
 │   ├── gateway.crt             ← software gateway identity certificate
 │   └── gateway.key             ← hybrid private key (ECC-hybrid-MLDSA5, perm. 600)
 ├── middleware/
 │   ├── middleware.crt          ← middleware identity certificate
 │   └── middleware.key          ← hybrid private key (ECC-hybrid-MLDSA5)
-└── allowlist.json              ← list of authorised certificates (mTLS without PKI)
+├── allowlist.json              ← list of authorised certificates (mTLS without PKI)
+├── gen_certs.py                ← certificate generation script (oqs-python)
+└── log_signer.py               ← ECC-hybrid-MLDSA5 log signing
+
+infra/                                 ← PQC tunnel (Ryan's scope)
+├── forward-proxy/
+│   ├── Dockerfile              ← Nginx build with OQS-provider
+│   └── nginx.conf              ← outgoing TLS/PQC config (X25519MLKEM768)
+└── reverse-proxy/
+    ├── Dockerfile
+    └── nginx.conf              ← PQC termination + mTLS verification
 ```
 
 **Mutual authentication flow (unchanged vs production):**
@@ -612,8 +622,10 @@ WS   /ws/events                         (real-time stream)
 # docker-compose.yml — simplified view
 services:
   simulator:        # Python agents (badge, door, motion, network)
+  gateway:          # Python gateway service (validation, buffering)
+  forward-proxy:    # Nginx/OQS — outgoing PQC tunnel (Gateway side)
+  reverse-proxy:    # Nginx/OQS — incoming PQC termination (Middleware side)
   mosquitto:        # MQTT Broker
-  gateway:          # Python gateway service (validation, TLS)
   nodered:          # Middleware / flow orchestration
   zookeeper:        # Required by Kafka
   kafka:            # Event streaming
@@ -625,7 +637,9 @@ services:
   prometheus:       # Metrics collection
 
 networks:
-  iot-net:          # Internal Docker network (isolated)
+  iot-net:            # IoT perimeter (internal: true) — simulator, gateway, forward-proxy
+  pqc-transit-net:    # PQC tunnel segment — forward-proxy ↔ reverse-proxy only
+  middleware-net:     # Middleware perimeter (internal: true) — reverse-proxy, mosquitto, nodered, kafka…
 ```
 
 ### Stack per layer
@@ -634,8 +648,9 @@ networks:
 |------------------|-------------------------|-------------------------|---------------------------------------------|
 | IoT Simulation   | Python agents           | Python 3.12             | Event generation (badges, doors…)           |
 | Protocols        | Mosquitto 2.x           | C                       | MQTT Broker                                 |
-| Gateway          | Python asyncio service  | Python 3.12             | Validation, buffer, MQTT publication        |
-| TLS/PQC Security | OpenSSL 3.x + liboqs + oqs-python | Python 3.12 | TLS 1.3 + X25519MLKEM768 + ECC-hybrid-MLDSA5   |
+| Gateway          | Python asyncio service  | Python 3.12             | Validation, buffer, MQTT publication (no TLS — delegated to forward-proxy) |
+| TLS/PQC Tunnel   | Nginx + OQS-provider (OpenSSL 3.x + liboqs) | Nginx / C | Forward & Reverse Proxy — TLS 1.3 + X25519MLKEM768 |
+| PQC Identity     | oqs-python + liboqs     | Python 3.12             | Certificate generation (ECC-hybrid-MLDSA5), log signing |
 | Middleware       | Node-RED (self-hosted)  | Node.js 20              | IoT flow orchestration                      |
 | Streaming        | Apache Kafka            | JVM                     | Inter-service message queue                 |
 | Storage          | TimescaleDB             | PostgreSQL 16           | Time series + signed logs                   |
@@ -736,12 +751,12 @@ iot-security/
 │   └── main.py                   ← simulator orchestrator
 ├── gateway/                       ← layer 3: software gateway
 │   └── gateway.py                ← validation, buffer, MQTT publication
-├── security/                      ← layer 4: TLS/PQC — Ryan & Rania's scope
-│   ├── ca/                       ← root authority (hybrid)
+├── security/                      ← layer 4: PQC identity & signing — Rania's scope
+│   ├── ca/                       ← root authority (hybrid ECC-hybrid-MLDSA5)
 │   ├── gateway/                  ← Gateway certificates & keys (hybrid)
 │   ├── middleware/               ← Middleware certificates & keys (hybrid)
-│   ├── tls_client.py             ← TLS client (X25519MLKEM768)
-│   ├── tls_server.py             ← TLS server
+│   ├── allowlist.json            ← list of authorised certificates (mTLS without PKI)
+│   ├── gen_certs.py              ← certificate generation script (oqs-python)
 │   └── log_signer.py             ← ECC-hybrid-MLDSA5 log signing
 ├── middleware/                    ← layer 5: Node-RED flows
 │   └── flows/                    ← exported Node-RED flows.json files
@@ -755,6 +770,12 @@ iot-security/
 │   └── src/
 ├── infra/
 │   ├── docker-compose.yml        ← orchestrates all services
+│   ├── forward-proxy/            ← layer 4: PQC tunnel outgoing — Ryan's scope
+│   │   ├── Dockerfile            ← Nginx build with OQS-provider
+│   │   └── nginx.conf            ← TLS/PQC config (X25519MLKEM768)
+│   ├── reverse-proxy/            ← layer 4: PQC tunnel incoming — Ryan's scope
+│   │   ├── Dockerfile
+│   │   └── nginx.conf            ← PQC termination + mTLS verification
 │   ├── mosquitto/
 │   │   └── mosquitto.conf
 │   ├── kafka/
@@ -792,4 +813,4 @@ An estimated breakdown of development time by major technical area:
 
 ---
 
-*Document last updated on 25/04/2026 — Validated by the team.*
+*Document last updated on 26/04/2026 — Validated by the team.*
