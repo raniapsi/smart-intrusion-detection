@@ -1,6 +1,3 @@
-#claude
-claude.md
-
 # Python
 __pycache__/
 *.py[cod]
@@ -51,6 +48,3 @@ node_modules/
 .pytest_cache/
 htmlcov/
 .coverage
-
-
-.gitignore
