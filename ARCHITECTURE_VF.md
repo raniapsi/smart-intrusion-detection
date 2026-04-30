@@ -251,14 +251,14 @@ ECC-hybrid-MLDSA5 offre le niveau de sécurité 5 (équivalent AES-256), le plus
 
 Pour compenser l'overhead calculatoire et la taille des messages du handshake PQC complet (ML-KEM-768), le système implémente le mécanisme de **TLS 1.3 Session Resumption** en mode hybride :
 *   **Handshake Initial (Full)** : Échange de clés complet **X25519 + ML-KEM-768**. Après authentification mutuelle, un ticket de session (PSK - Pre-Shared Key) est généré.
-*   **Reconnexions (Resumption)** : Utilisation du **PSK** combiné à un échange **DHE éphémère (X25519)**.
+*   **Reconnexions (Resumption)** : Utilisation du **PSK** combiné à un échange **DHE éphémère (X25519MLKEM768)**.
 
 > [!IMPORTANT]
-> **Héritage de la résistance quantique** : La reprise de session ne perd pas sa sécurité PQC. Le PSK utilisé lors de la reprise est directement dérivé du secret partagé établi via ML-KEM-768 lors du handshake initial. Même si l'échange éphémère de la reconnexion est uniquement classique (X25519), le secret global reste protégé par l'entropie quantique du PSK "parent".
+> **Héritage de la résistance quantique** : La reprise de session ne perd pas sa sécurité PQC. Le PSK utilisé lors de la reprise est directement dérivé du secret partagé établi via ML-KEM-768 lors du handshake initial. L'échange éphémère de la reconnexion utilise également l'algorithme hybride (X25519MLKEM768), garantissant une sécurité quantique de bout en bout et une Perfect Forward Secrecy robuste.
 
 **Bénéfices :**
 - **Performance** : Réduction de 90% de l'overhead PQC sur les reconnexions.
-- **Perfect Forward Secrecy (PFS)** : L'ajout de l'échange X25519 sur chaque reconnexion garantit que le vol physique d'un ticket de session ne permet pas de déchiffrer les sessions passées ou futures.
+- **Perfect Forward Secrecy (PFS)** : L'ajout de l'échange X25519MLKEM768 sur chaque reconnexion garantit que le vol physique d'un ticket de session ne permet pas de déchiffrer les sessions passées ou futures.
 
 ### 4.3 Protection des logs
 

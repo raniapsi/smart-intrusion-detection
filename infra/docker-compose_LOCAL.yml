@@ -1,0 +1,45 @@
+services:
+  forward-proxy:
+    image: openquantumsafe/nginx:latest
+    container_name: forward-proxy
+    volumes:
+      - ./forward-proxy/nginx.conf:/opt/nginx/nginx-conf/nginx.conf:ro
+      - ../security/ca/ca.crt:/etc/nginx/certs/ca.crt:ro
+      - ../security/gateway/gateway.crt:/etc/nginx/certs/gateway.crt:ro
+      - ../security/gateway/gateway.key:/etc/nginx/certs/gateway.key:ro
+    networks:
+      - iot-net
+      - pqc-transit-net
+    depends_on:
+      - reverse-proxy
+
+  reverse-proxy:
+    image: openquantumsafe/nginx:latest
+    container_name: reverse-proxy
+    volumes:
+      - ./reverse-proxy/nginx.conf:/opt/nginx/nginx-conf/nginx.conf:ro
+      - ../security/ca/ca.crt:/etc/nginx/certs/ca.crt:ro
+      - ../security/middleware/middleware.crt:/etc/nginx/certs/middleware.crt:ro
+      - ../security/middleware/middleware.key:/etc/nginx/certs/middleware.key:ro
+    networks:
+      - pqc-transit-net
+      - middleware-net
+    depends_on:
+      - mosquitto
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    command: mosquitto -c /mosquitto-no-auth.conf
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto-no-auth.conf:ro
+    networks:
+      - middleware-net
+
+networks:
+  iot-net:
+    internal: true
+  pqc-transit-net:
+    # Dedicated network for the PQC tunnel
+  middleware-net:
+    internal: true

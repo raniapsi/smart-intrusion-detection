@@ -32,7 +32,7 @@ Responsible for setting up the **end-to-end PQC tunnel** between the IoT zone an
 | 1 | **Forward Proxy (Gateway side)** | Nginx configuration compiled with OQS-provider. Intercepts local MQTT/HTTP flows and encapsulates them in the outgoing TLS/PQC tunnel. |
 | 2 | **Reverse Proxy (Middleware side)** | Terminates the incoming PQC tunnel, verifies client identity, redirects decrypted traffic to Mosquitto Broker / Node-RED. |
 | 3 | **TLS 1.3 Hybrid Handshake** | Configuration of the `X25519MLKEM768` key group in OpenSSL 3.x + OQS-provider. Validation of the full handshake (ClientHello → ServerHello → AES-256-GCM session). |
-| 4 | **Session Resumption (PSK+DHE)** | Activation of the TLS 1.3 session resumption mechanism in hybrid mode: PSK derived from the initial ML-KEM-768 secret + ephemeral X25519 exchange on each reconnection. |
+| 4 | **Session Resumption (PSK+DHE)** | Activation of the TLS 1.3 session resumption mechanism in hybrid mode: PSK derived from the initial ML-KEM-768 secret + ephemeral X25519MLKEM768 exchange on each reconnection. |
 | 5 | **Docker Network Segmentation** | Configuration of isolated Docker Networks (`internal: true`) to ensure the PQC tunnel is the only authorised communication vector between the IoT perimeter and the Middleware perimeter. |
 | 6 | **Performance Testing** | Measurement of full handshake latency vs. session resumption. Validation of the 90% overhead reduction stated in the architecture. |
 

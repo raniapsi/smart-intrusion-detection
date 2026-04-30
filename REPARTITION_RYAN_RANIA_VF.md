@@ -32,7 +32,7 @@ Responsable de la mise en place du **tunnel PQC de bout en bout** entre la zone 
 | 1 | **Forward Proxy (Gateway side)** | Configuration Nginx compilé avec OQS-provider. Interception des flux locaux MQTT/HTTP et encapsulation dans le tunnel TLS/PQC sortant. |
 | 2 | **Reverse Proxy (Middleware side)** | Terminaison du tunnel PQC entrant, vérification de l'identité client, redirection du trafic déchiffré vers Mosquitto Broker / Node-RED. |
 | 3 | **Handshake TLS 1.3 hybride** | Configuration du key group `X25519MLKEM768` dans OpenSSL 3.x + OQS-provider. Validation du handshake complet (ClientHello → ServerHello → session AES-256-GCM). |
-| 4 | **Session Resumption (PSK+DHE)** | Activation du mécanisme de reprise de session TLS 1.3 en mode hybride : PSK dérivé du secret ML-KEM-768 initial + échange éphémère X25519 sur chaque reconnexion. |
+| 4 | **Session Resumption (PSK+DHE)** | Activation du mécanisme de reprise de session TLS 1.3 en mode hybride : PSK dérivé du secret ML-KEM-768 initial + échange éphémère X25519MLKEM768 sur chaque reconnexion. |
 | 5 | **Segmentation réseau Docker** | Configuration des Docker Networks isolés (`internal: true`) pour garantir que le tunnel PQC est le seul vecteur de communication entre le périmètre IoT et le périmètre Middleware. |
 | 6 | **Tests de performance** | Mesure de la latence du handshake complet vs. session resumption. Validation du gain de 90% annoncé dans l'architecture. |
 
@@ -53,12 +53,12 @@ infra/
 
 ### Livrables
 
-- [ ] Forward Proxy fonctionnel (Nginx/OQS) avec tunnel PQC sortant
-- [ ] Reverse Proxy fonctionnel avec terminaison PQC et redirection
-- [ ] Handshake X25519MLKEM768 validé (capture Wireshark ou logs OpenSSL)
-- [ ] Session Resumption PSK+DHE fonctionnelle (mesure du gain de latence)
-- [ ] Docker Networks segmentés (`internal: true`) opérationnels
-- [ ] Documentation des tests de performance (latence handshake vs. resumption)
+- [x] Forward Proxy fonctionnel (Nginx/OQS) avec tunnel PQC sortant
+- [x] Reverse Proxy fonctionnel avec terminaison PQC et redirection
+- [x] Handshake X25519MLKEM768 validé (capture Wireshark ou logs OpenSSL)
+- [x] Session Resumption PSK+DHE fonctionnelle (mesure du gain de latence)
+- [x] Docker Networks segmentés (`internal: true`) opérationnels
+- [x] Documentation des tests de performance (latence handshake vs. resumption)
 
 ---
 

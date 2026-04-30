@@ -1,8 +1,0 @@
-# Couche Sécurité PQC — Dépendances Python
-# Ryan ZERHOUNI — Smart Intrusion Detection
-
-# Cryptographie classique (X25519, ECDSA P-384, AES-256-GCM, HKDF)
-cryptography>=42.0.0
-
-# Cryptographie post-quantique (ML-KEM-768, ML-DSA-65)
-pqcrypto>=0.1.0

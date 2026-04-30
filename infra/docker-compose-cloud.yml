@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  reverse-proxy:
+    image: openquantumsafe/nginx:latest
+    container_name: reverse-proxy-cloud
+    restart: unless-stopped
+    ports:
+      - "8443:8443"  # Port exposé sur Internet pour recevoir le trafic PQC
+    volumes:
+      - ./reverse-proxy/nginx.conf:/opt/nginx/nginx-conf/nginx.conf:ro
+      - ../security/ca/ca.crt:/etc/nginx/certs/ca.crt:ro
+      - ../security/middleware/middleware.crt:/etc/nginx/certs/middleware.crt:ro
+      - ../security/middleware/middleware.key:/etc/nginx/certs/middleware.key:ro
+    networks:
+      - middleware-net
+
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: mosquitto-cloud
+    restart: unless-stopped
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    networks:
+      - middleware-net
+
+networks:
+  middleware-net:
+    internal: true
