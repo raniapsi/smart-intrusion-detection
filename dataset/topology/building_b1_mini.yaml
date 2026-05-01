@@ -1,0 +1,118 @@
+# =============================================================================
+# Mini topology for step 2a — kept small so a single day produces a JSONL
+# you can inspect by eye. The full topology (50 users, 8 zones) lands in 2b.
+#
+# Units: map_x / map_y are floor-plan units, rescaled by the dashboard.
+# =============================================================================
+
+building_id: "B1"
+
+zones:
+  - zone_id: "Z1"
+    building_id: "B1"
+    name: "Lobby"
+    sensitivity: "PUBLIC"
+    map_x: 0.0
+    map_y: 0.0
+
+  - zone_id: "Z2"
+    building_id: "B1"
+    name: "Open Office"
+    sensitivity: "STANDARD"
+    map_x: 10.0
+    map_y: 0.0
+
+  - zone_id: "Z3"
+    building_id: "B1"
+    name: "Meeting Rooms"
+    sensitivity: "STANDARD"
+    map_x: 20.0
+    map_y: 0.0
+
+  - zone_id: "Z4"
+    building_id: "B1"
+    name: "Server Room"
+    sensitivity: "CRITICAL"
+    map_x: 30.0
+    map_y: 0.0
+
+users:
+  - user_id: "u001"
+    name: "Alice"
+    badge_id: "b001"
+    typical_zones: ["Z1", "Z2", "Z3"]   # never goes to Z4 in baseline
+    typical_arrival: "09:00:00"
+    typical_departure: "18:00:00"
+    arrival_std_minutes: 25.0
+    departure_std_minutes: 20.0
+
+  - user_id: "u002"
+    name: "Bob"
+    badge_id: "b002"
+    typical_zones: ["Z1", "Z2", "Z4"]   # IT — does go to Z4
+    typical_arrival: "08:30:00"
+    typical_departure: "17:30:00"
+    arrival_std_minutes: 30.0
+    departure_std_minutes: 25.0
+
+  - user_id: "u003"
+    name: "Carol"
+    badge_id: "b003"
+    typical_zones: ["Z1", "Z2", "Z3"]
+    typical_arrival: "09:30:00"
+    typical_departure: "18:30:00"
+    arrival_std_minutes: 35.0
+    departure_std_minutes: 30.0
+
+devices:
+  # One badge reader per zone (simplification — in 2b we'll have one per door)
+  - device_id: "R-Z1"
+    type: "BADGE_READER"
+    zone_id: "Z1"
+  - device_id: "R-Z2"
+    type: "BADGE_READER"
+    zone_id: "Z2"
+  - device_id: "R-Z3"
+    type: "BADGE_READER"
+    zone_id: "Z3"
+  - device_id: "R-Z4"
+    type: "BADGE_READER"
+    zone_id: "Z4"
+
+  # One door sensor per door
+  - device_id: "DS-Z1-Z2"
+    type: "DOOR_SENSOR"
+    zone_id: "Z2"
+  - device_id: "DS-Z2-Z3"
+    type: "DOOR_SENSOR"
+    zone_id: "Z3"
+  - device_id: "DS-Z2-Z4"
+    type: "DOOR_SENSOR"
+    zone_id: "Z4"
+
+  # One motion detector per non-public zone
+  - device_id: "MD-Z2"
+    type: "MOTION_DETECTOR"
+    zone_id: "Z2"
+  - device_id: "MD-Z3"
+    type: "MOTION_DETECTOR"
+    zone_id: "Z3"
+  - device_id: "MD-Z4"
+    type: "MOTION_DETECTOR"
+    zone_id: "Z4"
+
+doors:
+  - door_id: "D-Z1-Z2"
+    zone_id: "Z2"
+    sensor_device_id: "DS-Z1-Z2"
+    reader_device_id: "R-Z2"
+
+  - door_id: "D-Z2-Z3"
+    zone_id: "Z3"
+    sensor_device_id: "DS-Z2-Z3"
+    reader_device_id: "R-Z3"
+
+  - door_id: "D-Z2-Z4"
+    zone_id: "Z4"
+    sensor_device_id: "DS-Z2-Z4"
+    reader_device_id: "R-Z4"

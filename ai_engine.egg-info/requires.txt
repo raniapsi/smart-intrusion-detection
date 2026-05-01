@@ -1,0 +1,8 @@
+pydantic>=2.6
+pyyaml>=6.0
+numpy>=1.26
+
+[dev]
+pytest>=8.0
+
+[ml]
