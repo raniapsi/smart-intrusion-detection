@@ -10,10 +10,17 @@ Step 2a usage:
         --seed 42 \\
         --out dataset/output/sample_one_day.jsonl
 
-Produces a JSONL file (one UnifiedEvent per line) and prints a short
-summary on stderr.
+Step 2b usage:
 
-Step 2b will add a `generate-baseline` command that runs all users for N days.
+    python -m dataset.cli generate-baseline \\
+        --topology dataset/topology/building_b1.yaml \\
+        --start 2026-04-01 \\
+        --days 30 \\
+        --seed 42 \\
+        --out dataset/output/train_normal_30d.jsonl
+
+Both commands write a JSONL of UnifiedEvent objects (one per line) and
+print a summary on stderr.
 """
 
 from __future__ import annotations
@@ -21,10 +28,15 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections import Counter
 from datetime import date
 from pathlib import Path
 
-from dataset.generators import Rng, generate_user_day
+from dataset.generators import (
+    Rng,
+    generate_baseline,
+    generate_user_day,
+)
 from dataset.topology import load_topology
 
 
@@ -53,11 +65,9 @@ def _cmd_generate_one_day(args: argparse.Namespace) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
         for ev in events:
-            # model_dump_json() respects the schema (UTC datetimes, UUIDs as strings).
             f.write(ev.model_dump_json())
             f.write("\n")
 
-    # Quick summary on stderr (so stdout stays clean for piping).
     by_type: dict[str, int] = {}
     for ev in events:
         by_type[ev.event_type.value] = by_type.get(ev.event_type.value, 0) + 1
@@ -67,6 +77,56 @@ def _cmd_generate_one_day(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     print(f"  breakdown: {json.dumps(by_type, sort_keys=True)}", file=sys.stderr)
+    return 0
+
+
+def _cmd_generate_baseline(args: argparse.Namespace) -> int:
+    topo = load_topology(args.topology)
+
+    try:
+        start = date.fromisoformat(args.start)
+    except ValueError:
+        print(f"error: invalid --start '{args.start}', expected YYYY-MM-DD",
+              file=sys.stderr)
+        return 2
+
+    if args.days <= 0:
+        print("error: --days must be positive", file=sys.stderr)
+        return 2
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    type_counts: Counter[str] = Counter()
+    n_total = 0
+
+    print(
+        f"generating baseline: {args.days} days from {start}, "
+        f"{len(topo.users)} users, seed={args.seed}",
+        file=sys.stderr,
+    )
+
+    with out_path.open("w", encoding="utf-8") as f:
+        for ev in generate_baseline(
+            topo=topo,
+            start_day=start,
+            n_days=args.days,
+            seed=args.seed,
+        ):
+            f.write(ev.model_dump_json())
+            f.write("\n")
+            n_total += 1
+            type_counts[ev.event_type.value] += 1
+            if n_total % 10000 == 0:
+                print(f"  ... {n_total} events written", file=sys.stderr)
+
+    print(f"done: {n_total} events -> {out_path}", file=sys.stderr)
+    print(
+        f"  breakdown: {json.dumps(dict(sorted(type_counts.items())), sort_keys=True)}",
+        file=sys.stderr,
+    )
+    size_mb = out_path.stat().st_size / (1024 * 1024)
+    print(f"  file size: {size_mb:.1f} MB", file=sys.stderr)
     return 0
 
 
@@ -89,6 +149,21 @@ def _build_parser() -> argparse.ArgumentParser:
                        help="Master seed (default 42)")
     p_one.add_argument("--out", required=True, help="Output JSONL path")
     p_one.set_defaults(func=_cmd_generate_one_day)
+
+    p_base = sub.add_parser(
+        "generate-baseline",
+        help="Generate a multi-day baseline dataset across all users (step 2b).",
+    )
+    p_base.add_argument("--topology", required=True,
+                        help="Path to the full topology YAML")
+    p_base.add_argument("--start", required=True,
+                        help="First day, YYYY-MM-DD")
+    p_base.add_argument("--days", type=int, required=True,
+                        help="Number of calendar days to generate")
+    p_base.add_argument("--seed", type=int, default=42,
+                        help="Master seed (default 42)")
+    p_base.add_argument("--out", required=True, help="Output JSONL path")
+    p_base.set_defaults(func=_cmd_generate_baseline)
 
     return parser
 
