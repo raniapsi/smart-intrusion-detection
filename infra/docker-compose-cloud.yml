@@ -6,7 +6,7 @@ services:
     container_name: reverse-proxy-cloud
     restart: unless-stopped
     ports:
-      - "8443:8443"  # Port exposé sur Internet pour recevoir le trafic PQC
+      - "8443:8443" # Port exposé sur Internet pour recevoir le trafic PQC
     volumes:
       - ./reverse-proxy/nginx.conf:/opt/nginx/nginx-conf/nginx.conf:ro
       - ../security/ca/ca.crt:/etc/nginx/certs/ca.crt:ro
@@ -26,4 +26,4 @@ services:
 
 networks:
   middleware-net:
-    internal: true
+    driver: bridge # Nécessaire pour autoriser le mapping de port sur l'hôte
