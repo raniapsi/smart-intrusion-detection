@@ -15,7 +15,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-from .enums import AccessResult, DeviceStatus, DeviceType, DoorState
+from .enums import (
+    AccessResult,
+    DeviceStatus,
+    DeviceType,
+    DoorState,
+    NetworkAnomalyLabel,
+)
 
 
 # -----------------------------------------------------------------------------
@@ -136,9 +142,9 @@ class NetworkAnomalyPayload(BaseModel):
     """
 
     kind: Literal["NETWORK_ANOMALY"] = "NETWORK_ANOMALY"
-    anomaly_label: str = Field(
+    anomaly_label: NetworkAnomalyLabel = Field(
         ...,
-        description="e.g. 'PORT_SCAN', 'EXFILTRATION', 'C2_BEACON'",
+        description="Canonical label from the network agent",
     )
     src_ip: str
     severity_hint: float = Field(

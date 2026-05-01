@@ -15,6 +15,7 @@ from .enums import (
     DeviceType,
     DoorState,
     EventType,
+    NetworkAnomalyLabel,
     SeverityRaw,
     SourceLayer,
     ZoneSensitivity,
@@ -68,4 +69,5 @@ __all__ = [
     "SeverityRaw",
     "AIClassification",
     "ZoneSensitivity",
+    "NetworkAnomalyLabel",
 ]

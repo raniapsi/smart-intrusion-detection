@@ -118,3 +118,21 @@ class ZoneSensitivity(str, Enum):
     STANDARD = "STANDARD"      # offices, meeting rooms
     RESTRICTED = "RESTRICTED"  # archives, comms rooms
     CRITICAL = "CRITICAL"      # data center, server room
+
+
+class NetworkAnomalyLabel(str, Enum):
+    """
+    Canonical labels for pre-classified network anomalies.
+
+    Emitted by the network agent (cyber side) as a hint to the AI engine.
+    The AI still computes its own score; this is just a starting signal,
+    not a verdict. The set is closed (Pydantic enforces) so the rules
+    engine and feature extractor can pattern-match safely.
+    """
+
+    PORT_SCAN = "PORT_SCAN"          # SYN burst across many ports
+    EXFILTRATION = "EXFILTRATION"    # outbound volume far above baseline
+    C2_BEACON = "C2_BEACON"          # periodic small outbound to a fixed dst
+    LATERAL_MOVEMENT = "LATERAL_MOVEMENT"  # internal scan (one src, many dsts)
+    DOS = "DOS"                      # denial of service signal
+    UNKNOWN = "UNKNOWN"              # generic anomaly without further info
