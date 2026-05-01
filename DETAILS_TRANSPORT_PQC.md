@@ -107,27 +107,27 @@ Requête 3 (Session Resumption)   : 24.87 ms
 ### 6.2. Preuve d'Isolation Réseau (Segmentation)
 L'architecture repose sur une segmentation stricte pour garantir qu'aucun composant sensible ne soit exposé directement à Internet. Voici les tests de connectivité prouvant l'étanchéité :
 
-**A. Réseau `iot-net` (Côté Edge) : Isolation Totale**
+**A. Réseau `iot-net` (Côté Edge) : Isolation Totale** *(Exécuter sur votre Mac)*
 Les capteurs locaux sont dans un réseau `internal: true`. Ils ne peuvent pas joindre le serveur Cloud directement.
 ```bash
-docker run --rm --network infra_iot-net alpine ping -c 1 145.241.162.174
-# Sortie : ping: sendto: Network unreachable
+docker run --rm --network infra_iot-net alpine sh -c "nc -zv -w 3 145.241.162.174 8443"
+# Sortie : nc: 145.241.162.174 (145.241.162.174:8443): Network unreachable
 ```
 
-**B. Réseau `middleware-net` (Côté Cloud) : Isolation Totale**
+**B. Réseau `middleware-net` (Côté Cloud) : Isolation Totale** *(Exécuter sur la VM Oracle)*
 Le broker Mosquitto est enfermé. Il ne peut pas initier de connexion vers l'extérieur (ni vers Oracle lui-même sur son interface publique).
 ```bash
-docker run --rm --network infra_middleware-net alpine ping -c 1 145.241.162.174
-# Sortie : ping: sendto: Network unreachable
+sudo docker run --rm --network infra_middleware-net alpine sh -c "nc -zv -w 3 145.241.162.174 8443"
+# Sortie : nc: 145.241.162.174 (145.241.162.174:8443): Network unreachable
 ```
 
-**C. Réseau `internet-net` (Passerelle) : Sortie Autorisée**
-Seule la Gateway Edge peut joindre l'IP publique d'Oracle pour monter le tunnel.
+**C. Réseau `internet-net` (Passerelle Edge) : Sortie Autorisée** *(Exécuter sur votre Mac)*
+Seule la Gateway Edge peut joindre l'IP publique d'Oracle pour monter le tunnel. On teste ici la connectivité TCP sur le port 8443 (le ping ICMP est bloqué par le firewall Oracle).
 ```bash
-docker run --rm --network infra_internet-net alpine ping -c 1 145.241.162.174
-# Sortie : 64 bytes from 145.241.162.174: seq=0 ttl=64 time=15.2 ms (Succès)
+docker run --rm --network infra_internet-net alpine sh -c "nc -zv -w 3 145.241.162.174 8443"
+# Sortie : 145.241.162.174 (145.241.162.174:8443) open
 ```
-*Note : Cette triple vérification prouve que nos deux zones de données (Capteurs et Broker) sont en "Air-Gap" total. Le seul flux possible est le tunnel cryptographique PQC.*
+*Note : Cette triple vérification prouve que nos deux zones de données (Capteurs et Broker) sont en "Air-Gap" total. Le seul flux possible est le tunnel cryptographique PQC via le port TCP 8443.*
 
 ### 6.3. Test de Routage de Bout-en-Bout (`test_tunnel.sh`)
 Ce script vérifie l'étanchéité du réseau `internal: true`. Il lance un client Mosquitto isolé sur le réseau local (`iot-net`) et tente de joindre la VM Oracle via la Gateway Edge locale.
@@ -139,13 +139,18 @@ chmod +x test_tunnel.sh
 ```text
 [1/2] Envoi d'un message depuis le réseau isolé iot-net vers la Gateway Edge...
 Client null sending CONNECT
-Client null received CONNACK (0)
-Client null sending PUBLISH (d0, q0, r0, m1, 'pqc/test', ... (25 bytes))
+Client (null) received CONNACK (0)
+Client null sending PUBLISH (d0, q0, r0, m1, 'pqc/test', ... (24 bytes))
 Client null sending DISCONNECT
-
-[2/2] Vérification :
-Si vous voyez 'received CONNACK (0)', le message a bien traversé le tunnel PQC jusqu'à Oracle !
 ```
+**Explication ligne par ligne :**
+| Ligne | Signification |
+|-------|---------------|
+| `sending CONNECT` | Le client Mosquitto (isolé sur `iot-net`) envoie une demande de connexion au Forward Proxy local (port 9001). |
+| `received CONNACK (0)` | **Preuve critique.** Le code `0` signifie "Connexion acceptée". Le message a traversé : `iot-net` → Forward Proxy → tunnel PQC (Internet) → Reverse Proxy → `middleware-net` → Mosquitto → et retour. Si le tunnel était cassé, on verrait un timeout ou un code d'erreur. |
+| `sending PUBLISH` | Le client publie un message de test sur le topic `pqc/test` (24 octets). Ce message voyage chiffré en PQC à travers le tunnel. |
+| `sending DISCONNECT` | Le client se déconnecte proprement. La session TLS est fermée et un ticket de reprise (PSK) est sauvegardé pour les connexions futures. |
+
 *Note technique : On utilise l'option `--ws` car Nginx est configuré pour encapsuler le flux MQTT dans du WebSocket afin de traverser les couches HTTP si nécessaire.*
 
 ### 6.4. Vérification Rapide du KEM (Client cURL)
@@ -219,14 +224,14 @@ Voici la visualisation graphique du parcours d'un message MQTT depuis un capteur
 ### 7.2. Protocole de Vérification "Live" (Audit Pas-à-Pas)
 
 #### Étape 1 : Préparation de la surveillance (Sur la VM Oracle)
-Connectez-vous à votre instance Cloud et lancez la surveillance combinée des logs du Proxy et du Broker :
+Connectez-vous à votre instance Cloud et lancez la surveillance en temps réel des logs du Proxy et du Broker :
 
 1.  **Ouvrez un terminal** et connectez-vous en SSH à la VM.
 2.  **Lancez la commande suivante** :
     ```bash
-    sudo docker logs -f reverse-proxy-cloud & sudo docker logs -f mosquitto-cloud
+    sudo docker compose -f docker-compose-cloud.yml logs -f --tail=0
     ```
-    *   *Note : Le symbole `&` permet de surveiller les deux containers simultanément dans la même fenêtre.*
+    *   *Note : L'option `--tail=0` ignore l'historique et n'affiche que les **nouveaux** événements en temps réel. Les lignes sont préfixées par le nom du container source (`reverse-proxy-cloud` ou `mosquitto-cloud`).*
 
 #### Étape 2 : Injection du trafic (Sur votre Mac)
 Simulez l'envoi d'une alerte depuis un capteur IOT situé sur votre réseau local :
@@ -238,22 +243,23 @@ Simulez l'envoi d'une alerte depuis un capteur IOT situé sur votre réseau loca
     ```
 
 #### Étape 3 : Analyse du trajet du paquet (Preuve d'Audit)
-Observez votre terminal SSH sur la VM. Les logs du Proxy et du Broker vont s'entremêler, prouvant le passage de relais en temps réel :
+Observez votre terminal SSH sur la VM. Les logs du Proxy et du Broker apparaissent en temps réel, prouvant le passage de relais :
 
 **Séquence observée sur la VM Oracle :**
 ```text
-1. Entrée Proxy (IP de votre Mac) :
-46.193.69.53 - - [...] "GET /mqtt HTTP/1.1" 101 6 "-" "-"
-<-- Le code 101 confirme l'acceptation du tunnel PQC
-
-2. Sortie Proxy -> Entrée Broker (IP interne du Proxy) :
-1777580120: New connection from 172.18.0.3:37660 on port 9001
-<-- Le Proxy (172.18.0.3) a transmis le paquet au Broker
-
-3. Validation Broker :
-1777580120: New client connected ... as auto-3BC43817...
-<-- Le message a bien traversé toute la chaîne
+mosquitto-cloud  | 1777663117: New connection from 172.18.0.3:46874 on port 9001.
+mosquitto-cloud  | 1777663117: New client connected from 172.18.0.3:46874 as auto-694E109D-035F-8855-4523-5E8586C4974A (p4, c1, k60).
+mosquitto-cloud  | 1777663117: Client auto-694E109D-035F-8855-4523-5E8586C4974A [172.18.0.3:46874] disconnected.
+reverse-proxy-cloud  | 46.193.69.53 - - [01/May/2026:19:18:37 +0000] "GET /mqtt HTTP/1.1" 101 6 "-" "-"
 ```
+
+**Explication ligne par ligne :**
+| # | Source | Ligne | Signification |
+|---|--------|-------|---------------|
+| 1 | `mosquitto-cloud` | `New connection from 172.18.0.3` | Le Reverse Proxy (IP interne `172.18.0.3`) transmet la connexion au Broker. Le Broker ne voit **jamais** l'IP du Mac. |
+| 2 | `mosquitto-cloud` | `New client connected ... as auto-694E...` | Le client MQTT est authentifié et accepté. Le message peut transiter. |
+| 3 | `mosquitto-cloud` | `Client auto-694E... disconnected` | Déconnexion propre après le PUBLISH. |
+| 4 | `reverse-proxy-cloud` | `"GET /mqtt HTTP/1.1" 101` | Le code **101 Switching Protocols** confirme que le tunnel PQC a accepté la connexion WebSocket. L'IP `46.193.69.53` est celle de votre Mac (Forward Proxy Edge). |
 
 **Dans le terminal de votre Mac :**
 Vous devez recevoir la confirmation suivante du script :
