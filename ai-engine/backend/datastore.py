@@ -198,10 +198,25 @@ class Datastore:
 
     def current_zone_scores(self) -> dict[str, float]:
         """
-        For each zone, return the MAX ai_score of the most recent N events
-        (a "current threat level" gauge for the dashboard map).
+        Per-zone "current threat level" gauge for the dashboard map.
+
+        Definition:
+          score(zone) = max(score of active alerts in this zone,
+                            max ai_score of recent events in this zone)
+
+        The "active alerts" component is the dominant signal: as long as
+        an attack alert is open in a zone, the map keeps showing it.
+        Once the operator acknowledges the alerts, the score falls back
+        to the recent-events component, which trends to baseline as more
+        normal events arrive.
+
+        This matches what a SOC operator expects: the map highlights what
+        needs attention, not a moving average that "forgets" the attack.
         """
-        N = 50
+        # Recent-events component (lookback over the LAST N events seen
+        # in the zone — useful when there are no alerts but elevated
+        # scores, e.g. SUSPECT events).
+        N = 200
         out: dict[str, float] = {}
         for z in self._topo.zones:
             recent = self._events_by_zone.get(z.zone_id, [])[-N:]
@@ -209,4 +224,15 @@ class Datastore:
                 out[z.zone_id] = 0.0
             else:
                 out[z.zone_id] = max(e.ai_score for e in recent)
+
+        # Active-alerts component — overrides the recent-events score
+        # whenever it is higher (which it almost always is for a real
+        # attack, since alerts come from CRITICAL/SUSPECT events).
+        for alert in self._alerts:
+            if alert.acknowledged:
+                continue
+            cur = out.get(alert.zone_id, 0.0)
+            if alert.score > cur:
+                out[alert.zone_id] = alert.score
+
         return out
