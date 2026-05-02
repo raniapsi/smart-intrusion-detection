@@ -181,10 +181,13 @@ def train_isolation_forest(
 
     # Calibrate score mapping using the TRAINING decisions:
     # - normal anchor: median of training decisions (most "normal" point)
-    # - outlier anchor: 1st percentile (most extreme of the training set)
+    # - outlier anchor: 0.1th percentile (the most extreme of the training
+    #   set). Tightened from the 1st percentile to reduce the false-alarm
+    #   rate at the SUSPECT/CRITICAL thresholds: only the 0.1% most extreme
+    #   of training events will map to score >= 0.5.
     decisions = model.decision_function(X)
     normal_anchor = float(np.median(decisions))
-    outlier_anchor = float(np.percentile(decisions, 1))
+    outlier_anchor = float(np.percentile(decisions, 0.1))
 
     return TrainedIsolationForest(
         model=model,

@@ -11,6 +11,10 @@ dependencies = [
     "pyarrow>=15.0",
     "scikit-learn>=1.4",
     "joblib>=1.3",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "websockets>=12.0",
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]
@@ -24,9 +28,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["schemas*", "dataset*", "features*", "models*", "evaluation*", "fusion*"]
+include = ["schemas*", "dataset*", "features*", "models*", "evaluation*", "fusion*", "scoring_service*", "backend*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["tests", "dataset/tests", "features/tests", "models/tests", "evaluation/tests", "fusion/tests"]
+testpaths = ["tests", "dataset/tests", "features/tests", "models/tests", "evaluation/tests", "fusion/tests", "scoring_service/tests", "backend/tests"]
 addopts = "-v --tb=short"

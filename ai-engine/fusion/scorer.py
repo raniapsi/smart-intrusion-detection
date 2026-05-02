@@ -95,7 +95,16 @@ def fuse_scores(
 
     # Step 2: bonus = weight × peer × (1 - combined)
     bonus = correlation_weight * peer * (1.0 - score_combined)
-    score_final = np.clip(score_combined + bonus, 0.0, 1.0).astype(np.float32)
+    # Convert to float64 BEFORE rounding. float32 cannot represent 0.7
+    # exactly, which makes the score≥0.7 boundary comparison flaky between
+    # the scorer and the Pydantic validator on EnrichedEvent.
+    # We keep score_final in float64 from here on; the ~1 MB extra storage
+    # for 360k rows is well worth a clean comparison.
+    score_final = np.clip(
+        score_combined.astype(np.float64) + bonus.astype(np.float64),
+        0.0, 1.0,
+    )
+    score_final = np.round(score_final, 4)
 
     # Step 3: classification mapping
     classification = np.where(
