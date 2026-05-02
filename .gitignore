@@ -1,0 +1,153 @@
+# ============================================================
+# Python
+# ============================================================
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.env/
+.python-version
+
+# Python packaging / build
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache/
+.mypy_cache/
+.ruff_cache/
+.pyre/
+.dmypy.json
+dmypy.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ============================================================
+# macOS / Windows / Linux junk
+# ============================================================
+
+.DS_Store
+.AppleDouble
+.LSOverride
+__MACOSX/
+._*
+Thumbs.db
+Desktop.ini
+
+# ============================================================
+# IDE / editors
+# ============================================================
+
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ============================================================
+# Logs
+# ============================================================
+
+*.log
+logs/
+
+# ============================================================
+# Environment / secrets
+# ============================================================
+
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# ============================================================
+# Generated datasets
+# ============================================================
+
+ai-engine/dataset/output/
+ai-engine/dataset/**/*.jsonl
+ai-engine/dataset/**/*.truth.json
+
+# Keep topology files
+!ai-engine/dataset/topology/*.yaml
+!ai-engine/dataset/topology/*.yml
+
+# ============================================================
+# Generated features
+# ============================================================
+
+ai-engine/features/output/
+ai-engine/features/**/*.parquet
+ai-engine/features/**/*.csv
+ai-engine/features/**/*.pkl
+ai-engine/features/**/*.pickle
+
+# ============================================================
+# Trained models / model outputs
+# ============================================================
+
+ai-engine/models/output/
+ai-engine/models/trained/
+ai-engine/models/**/*.joblib
+ai-engine/models/**/*.pkl
+ai-engine/models/**/*.pickle
+ai-engine/models/**/*.meta.json
+
+# ============================================================
+# Fusion outputs
+# ============================================================
+
+ai-engine/fusion/output/
+ai-engine/fusion/**/*.parquet
+ai-engine/fusion/**/*.csv
+
+# ============================================================
+# Evaluation outputs
+# ============================================================
+
+ai-engine/evaluation/output/
+ai-engine/evaluation/**/*.csv
+ai-engine/evaluation/**/*.json
+
+# ============================================================
+# Temporary files
+# ============================================================
+
+tmp/
+temp/
+*.tmp
+*.bak
+*.old
+
+# ============================================================
+# Optional: local archives
+# ============================================================
+
+*.zip
+*.tar
+*.tar.gz
+*.tgz
