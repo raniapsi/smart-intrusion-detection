@@ -134,6 +134,13 @@ ai-engine/evaluation/**/*.csv
 ai-engine/evaluation/**/*.json
 
 # ============================================================
+# Scoring service outputs
+# ============================================================
+ai-engine/scoring_service/output
+ai-engine/scoring_service/**/*.csv
+ai-engine/scoring_service/**/*.json
+
+# ============================================================
 # Temporary files
 # ============================================================
 
@@ -151,3 +158,4 @@ temp/
 *.tar
 *.tar.gz
 *.tgz
+.*

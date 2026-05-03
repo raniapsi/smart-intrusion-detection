@@ -25,123 +25,64 @@ type DisplayZone = ZoneScoreOut & {
   isFallback: boolean
 }
 
-const LAYERS: LayerLayout[] = [
-  {
-    zoneId: 'Z8',
-    fallbackName: 'Server Room',
-    fallbackSensitivity: 'CRITICAL',
-    x: 330,
-    y: 42,
-    w: 430,
-    dx: 54,
-    dy: 28,
-    thickness: 42,
-    statX: 810,
-    statY: 42,
-  },
-  {
-    zoneId: 'Z7',
-    fallbackName: 'Archives',
-    fallbackSensitivity: 'RESTRICTED',
-    x: 292,
-    y: 100,
-    w: 430,
-    dx: 54,
-    dy: 28,
-    thickness: 42,
-    statX: 810,
-    statY: 100,
-  },
-  {
-    zoneId: 'Z6',
-    fallbackName: 'HR Offices',
-    fallbackSensitivity: 'STANDARD',
-    x: 254,
-    y: 158,
-    w: 430,
-    dx: 54,
-    dy: 28,
-    thickness: 42,
-    statX: 810,
-    statY: 158,
-  },
-  {
-    zoneId: 'Z5',
-    fallbackName: 'Cafeteria',
-    fallbackSensitivity: 'STANDARD',
-    x: 216,
-    y: 216,
-    w: 430,
-    dx: 54,
-    dy: 28,
-    thickness: 42,
-    statX: 810,
-    statY: 216,
-  },
-  {
-    zoneId: 'Z4',
-    fallbackName: 'Engineering',
-    fallbackSensitivity: 'STANDARD',
-    x: 178,
-    y: 274,
-    w: 430,
-    dx: 54,
-    dy: 28,
-    thickness: 42,
-    statX: 810,
-    statY: 274,
-  },
-  {
-    zoneId: 'Z3',
-    fallbackName: 'Meeting Rooms',
-    fallbackSensitivity: 'STANDARD',
-    x: 140,
-    y: 332,
-    w: 430,
-    dx: 54,
-    dy: 28,
-    thickness: 42,
-    statX: 810,
-    statY: 332,
-  },
-  {
-    zoneId: 'Z2',
-    fallbackName: 'Open Office',
-    fallbackSensitivity: 'STANDARD',
-    x: 102,
-    y: 390,
-    w: 430,
-    dx: 54,
-    dy: 28,
-    thickness: 42,
-    statX: 810,
-    statY: 390,
-  },
-  {
-    zoneId: 'Z1',
-    fallbackName: 'Lobby',
-    fallbackSensitivity: 'PUBLIC',
-    x: 64,
-    y: 448,
-    w: 430,
-    dx: 54,
-    dy: 28,
-    thickness: 42,
-    statX: 810,
-    statY: 448,
-  },
+// Layout constants — bumping vertical spacing and slab thickness so the
+// zone label fits comfortably inside the front face. The viewBox grows
+// accordingly: more vertical room is fine since users can scroll the page.
+const LAYER_THICKNESS = 56
+const LAYER_GAP_Y = 68
+const LAYER_DX = 54
+const LAYER_DY = 28
+const LAYER_W = 380
+const FIRST_LAYER_Y = 60
+const STAT_X = 830
+const STAT_BASE_Y = 60
+// Step right by this many user-space units when going UP one layer.
+const STAIR_STEP = 38
+
+// Defined in order: top of the stack first (Z8 = server room, most sensitive
+// → on top), bottom last (Z1 = lobby).
+const ZONE_ORDER: Array<
+  Pick<LayerLayout, 'zoneId' | 'fallbackName' | 'fallbackSensitivity'>
+> = [
+  { zoneId: 'Z8', fallbackName: 'Server Room',   fallbackSensitivity: 'CRITICAL'   },
+  { zoneId: 'Z7', fallbackName: 'Archives',      fallbackSensitivity: 'RESTRICTED' },
+  { zoneId: 'Z6', fallbackName: 'HR Offices',    fallbackSensitivity: 'STANDARD'   },
+  { zoneId: 'Z5', fallbackName: 'Cafeteria',     fallbackSensitivity: 'STANDARD'   },
+  { zoneId: 'Z4', fallbackName: 'Engineering',   fallbackSensitivity: 'STANDARD'   },
+  { zoneId: 'Z3', fallbackName: 'Meeting Rooms', fallbackSensitivity: 'STANDARD'   },
+  { zoneId: 'Z2', fallbackName: 'Open Office',   fallbackSensitivity: 'STANDARD'   },
+  { zoneId: 'Z1', fallbackName: 'Lobby',         fallbackSensitivity: 'PUBLIC'     },
 ]
+
+const LAYERS: LayerLayout[] = ZONE_ORDER.map((entry, i) => {
+  // Highest layer (i=0) sits furthest to the right; each step down moves
+  // a bit to the left, giving the staircase / depth illusion.
+  const stairsAbove = ZONE_ORDER.length - 1 - i
+  return {
+    ...entry,
+    x: 64 + stairsAbove * STAIR_STEP,
+    y: FIRST_LAYER_Y + i * LAYER_GAP_Y,
+    w: LAYER_W,
+    dx: LAYER_DX,
+    dy: LAYER_DY,
+    thickness: LAYER_THICKNESS,
+    statX: STAT_X,
+    statY: STAT_BASE_Y + i * LAYER_GAP_Y,
+  }
+})
+
+const VIEWBOX_W = 1120
+const VIEWBOX_H =
+  FIRST_LAYER_Y + (LAYERS.length - 1) * LAYER_GAP_Y + LAYER_DY + LAYER_THICKNESS + 80
 
 export function BuildingMap({ data, selectedZone, onSelectZone }: Props) {
   const [hoveredZone, setHoveredZone] = useState<string | null>(null)
 
   const zonesById = useMemo(() => {
     const map = new Map<string, ZoneScoreOut>()
-
     for (const zone of data?.zones ?? []) {
       map.set(zone.zone_id, zone)
     }
-
     return map
   }, [data])
 
@@ -179,7 +120,7 @@ export function BuildingMap({ data, selectedZone, onSelectZone }: Props) {
 
       <div className="overflow-x-auto">
         <svg
-          viewBox="0 0 1120 585"
+          viewBox={`0 0 ${VIEWBOX_W} ${VIEWBOX_H}`}
           className="w-full min-w-[900px] h-auto"
           role="img"
           aria-label="Building B1 layered threat map"
@@ -218,7 +159,7 @@ export function BuildingMap({ data, selectedZone, onSelectZone }: Props) {
             </linearGradient>
           </defs>
 
-          <rect x="0" y="0" width="1120" height="585" rx="14" fill="#0b0f17" />
+          <rect x="0" y="0" width={VIEWBOX_W} height={VIEWBOX_H} rx="14" fill="#0b0f17" />
 
           <g opacity="0.16">
             {Array.from({ length: 18 }).map((_, i) => (
@@ -227,16 +168,16 @@ export function BuildingMap({ data, selectedZone, onSelectZone }: Props) {
                 x1={i * 70}
                 y1="0"
                 x2={i * 70}
-                y2="585"
+                y2={VIEWBOX_H}
                 stroke="#374151"
               />
             ))}
-            {Array.from({ length: 10 }).map((_, i) => (
+            {Array.from({ length: Math.ceil(VIEWBOX_H / 65) }).map((_, i) => (
               <line
                 key={`grid-h-${i}`}
                 x1="0"
                 y1={i * 65}
-                x2="1120"
+                x2={VIEWBOX_W}
                 y2={i * 65}
                 stroke="#374151"
               />
@@ -252,8 +193,8 @@ export function BuildingMap({ data, selectedZone, onSelectZone }: Props) {
           </text>
 
           {displayLayers.map(({ layout, zone }) => {
-            const active = selectedZone === zone.zone_id || hoveredZone === zone.zone_id
-
+            const active =
+              selectedZone === zone.zone_id || hoveredZone === zone.zone_id
             return (
               <Connector
                 key={`connector-${zone.zone_id}`}
@@ -271,14 +212,16 @@ export function BuildingMap({ data, selectedZone, onSelectZone }: Props) {
               zone={zone}
               selected={selectedZone === zone.zone_id}
               hovered={hoveredZone === zone.zone_id}
-              onHover={(isHovered) => setHoveredZone(isHovered ? zone.zone_id : null)}
+              onHover={(isHovered) =>
+                setHoveredZone(isHovered ? zone.zone_id : null)
+              }
               onClick={() => toggleZone(zone.zone_id)}
             />
           ))}
 
           {displayLayers.map(({ layout, zone }) => {
-            const active = selectedZone === zone.zone_id || hoveredZone === zone.zone_id
-
+            const active =
+              selectedZone === zone.zone_id || hoveredZone === zone.zone_id
             return (
               <StatsPanel
                 key={`panel-${zone.zone_id}`}
@@ -293,7 +236,7 @@ export function BuildingMap({ data, selectedZone, onSelectZone }: Props) {
           {selectedZone && (
             <text
               x="40"
-              y="565"
+              y={VIEWBOX_H - 20}
               className="fill-suspect text-[10px] font-mono uppercase tracking-widest"
             >
               Filter active · selected zone {selectedZone} · click the same layer to reset
@@ -309,7 +252,6 @@ function toDisplayZone(layout: LayerLayout, zone?: ZoneScoreOut): DisplayZone {
   if (zone !== undefined) {
     return { ...zone, isFallback: false }
   }
-
   return {
     zone_id: layout.zoneId,
     zone_name: layout.fallbackName,
@@ -341,10 +283,36 @@ function LayerShape({
 
   const [nameLine1, nameLine2] = splitZoneName(zone.zone_name, 16)
 
-  const badgeX = layout.x + 18
-  const badgeY = layout.y + 14
-  const nameX = badgeX + 44
-  const nameY = layout.y + 28
+  // ---- Label placement --------------------------------------------------
+  // We anchor the label inside the FRONT FACE of the slab — the bottom
+  // rectangle of the perspective shape, which is the only fully visible
+  // and rectangular surface. This guarantees the label cannot overflow
+  // the zone's outline. Front face spans:
+  //   x ∈ [layout.x + layout.dx, layout.x + layout.dx + layout.w]
+  //   y ∈ [layout.y + layout.dy, layout.y + layout.dy + layout.thickness]
+  const frontX = layout.x + layout.dx
+  const frontY = layout.y + layout.dy
+
+  const badgeW = 38
+  const badgeH = 22
+  const badgeX = frontX + 14
+  const badgeY = frontY + (layout.thickness - badgeH) / 2
+
+  const nameX = badgeX + badgeW + 10
+  // Vertical baseline for the (single- or two-line) name. We tweak so the
+  // text is visually centred on the badge.
+  const nameTextY = nameLine2
+    ? badgeY + 11    // first of two lines: top half of the badge area
+    : badgeY + 16    // single line: vertically centred on the badge
+
+  // Background pill for the whole label group, sized to the longest line.
+  const longestNameChars = Math.max(
+    nameLine1.length,
+    nameLine2 ? nameLine2.length : 0,
+  )
+  const labelBgWidth = badgeW + 12 + Math.max(longestNameChars * 7.4, 60)
+  const labelBgHeight = nameLine2 ? 42 : 32
+  const labelBgY = frontY + (layout.thickness - labelBgHeight) / 2
 
   return (
     <g
@@ -366,35 +334,36 @@ function LayerShape({
         strokeWidth={selected ? 2.8 : zone.classification === 'CRITICAL' ? 2.1 : 1.5}
       />
 
+      {/* Label background pill — fully inside the front face */}
       <rect
-        x={layout.x + 12}
-        y={layout.y + 10}
-        width={nameLine2 ? 210 : 190}
-        height={nameLine2 ? 38 : 28}
-        rx="8"
-        fill="rgba(3, 7, 18, 0.28)"
-        stroke="rgba(255,255,255,0.05)"
-        strokeWidth="1"
-      />
-
-      <rect
-        x={badgeX}
-        y={badgeY}
-        width="34"
-        height="18"
-        rx="6"
-        fill="rgba(2, 6, 23, 0.74)"
+        x={frontX + 8}
+        y={labelBgY}
+        width={labelBgWidth}
+        height={labelBgHeight}
+        rx="9"
+        fill="rgba(3, 7, 18, 0.55)"
         stroke="rgba(255,255,255,0.08)"
         strokeWidth="1"
       />
 
+      {/* Zone-id badge */}
+      <rect
+        x={badgeX}
+        y={badgeY}
+        width={badgeW}
+        height={badgeH}
+        rx="6"
+        fill="rgba(2, 6, 23, 0.85)"
+        stroke="rgba(255,255,255,0.1)"
+        strokeWidth="1"
+      />
       <text
-        x={badgeX + 17}
-        y={badgeY + 13}
+        x={badgeX + badgeW / 2}
+        y={badgeY + 15}
         textAnchor="middle"
         fill="#f8fafc"
         style={{
-          fontSize: '10px',
+          fontSize: '11px',
           fontWeight: 800,
           fontFamily: 'monospace',
           letterSpacing: '0.08em',
@@ -403,32 +372,26 @@ function LayerShape({
         {zone.zone_id}
       </text>
 
+      {/* Zone name */}
       <text
         x={nameX}
-        y={nameY}
+        y={nameTextY}
         fill="#f8fafc"
-        stroke="rgba(2,6,23,0.82)"
-        strokeWidth="2.5"
-        paintOrder="stroke"
         style={{
-          fontSize: '12px',
+          fontSize: '13px',
           fontWeight: 800,
           fontFamily: 'monospace',
         }}
       >
         {nameLine1}
       </text>
-
       {nameLine2 && (
         <text
           x={nameX}
-          y={nameY + 14}
+          y={nameTextY + 14}
           fill="#f8fafc"
-          stroke="rgba(2,6,23,0.82)"
-          strokeWidth="2.5"
-          paintOrder="stroke"
           style={{
-            fontSize: '11px',
+            fontSize: '12px',
             fontWeight: 800,
             fontFamily: 'monospace',
           }}
@@ -437,29 +400,21 @@ function LayerShape({
         </text>
       )}
 
-      <text
-        x={layout.x + 18}
-        y={layout.y + layout.dy + layout.thickness - 12}
-        className="fill-gray-300 text-[9px] font-mono uppercase tracking-wider"
-      >
-        {zone.sensitivity}
-      </text>
-
+      {/* Classification + score on the right side of the front face */}
       <text
         x={layout.x + layout.w + layout.dx - 18}
-        y={layout.y + layout.dy + layout.thickness - 34}
+        y={frontY + layout.thickness - 36}
         textAnchor="end"
         fill={colors.stroke}
         className="text-[10px] font-mono font-bold uppercase tracking-wider"
       >
         {zone.classification}
       </text>
-
       <text
         x={layout.x + layout.w + layout.dx - 18}
-        y={layout.y + layout.dy + layout.thickness - 10}
+        y={frontY + layout.thickness - 12}
         textAnchor="end"
-        className="fill-gray-100 text-[21px] font-mono font-bold"
+        className="fill-gray-100 text-[22px] font-mono font-bold"
       >
         {zone.current_score.toFixed(2)}
       </text>
@@ -493,7 +448,6 @@ function Connector({
         strokeWidth={active ? 2.4 : 1.4}
         strokeDasharray={active ? undefined : '5 7'}
       />
-
       <circle cx={startX} cy={startY} r={active ? 4 : 3} fill={colors.stroke} />
       <circle cx={endX} cy={endY} r={active ? 4 : 3} fill={colors.stroke} />
     </g>
@@ -525,7 +479,11 @@ function StatsPanel({
   const separatorX = x + 214
 
   return (
-    <g onClick={onClick} style={{ cursor: 'pointer' }} filter={active ? 'url(#zoneGlow)' : undefined}>
+    <g
+      onClick={onClick}
+      style={{ cursor: 'pointer' }}
+      filter={active ? 'url(#zoneGlow)' : undefined}
+    >
       <rect
         x={x}
         y={y}
@@ -547,7 +505,6 @@ function StatsPanel({
         stroke="rgba(255,255,255,0.08)"
         strokeWidth="1"
       />
-
       <text
         x={x + 31}
         y={y + 25}
@@ -570,7 +527,6 @@ function StatsPanel({
       >
         {truncateText(nameLine1, 18)}
       </text>
-
       {nameLine2 && (
         <text
           x={x + 58}
@@ -581,6 +537,7 @@ function StatsPanel({
         </text>
       )}
 
+      {/* Sensitivity stays in the side panel only */}
       <text
         x={x + 14}
         y={y + (nameLine2 ? 58 : 44)}
@@ -680,7 +637,6 @@ function splitZoneName(name: string, maxLineLength = 14): [string, string?] {
 
   for (const word of words) {
     const candidate = line1 ? `${line1} ${word}` : word
-
     if (candidate.length <= maxLineLength || line1.length === 0) {
       line1 = candidate
     } else {
@@ -710,7 +666,6 @@ function svgColors(classification: Classification): {
         side: 'rgba(91, 20, 26, 0.96)',
         stroke: '#ef4444',
       }
-
     case 'SUSPECT':
       return {
         top: 'rgba(245, 158, 11, 0.52)',
@@ -718,7 +673,6 @@ function svgColors(classification: Classification): {
         side: 'rgba(92, 41, 12, 0.96)',
         stroke: '#f59e0b',
       }
-
     case 'NORMAL':
     default:
       return {

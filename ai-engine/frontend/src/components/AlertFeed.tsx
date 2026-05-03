@@ -5,41 +5,50 @@ import { formatDateTime } from '../lib/format'
 import { ClassificationBadge } from './ClassificationBadge'
 
 type Props = {
+  // Already-filtered list — AlertFeed is dumb, it does no filtering.
   alerts: AlertOut[]
   loading: boolean
   onAcknowledged: () => void
-  filterZone: string | null
+  // Optional filter bar / extra header rendered just below the title.
+  filterBar?: React.ReactNode
+  // Used in the title to indicate active filtering. Caller decides what
+  // to pass (e.g. "zone Z8", "filtered", "CRITICAL", etc.).
+  filterLabel?: string | null
 }
 
-export function AlertFeed({ alerts, loading, onAcknowledged, filterZone }: Props) {
-  const filtered = filterZone
-    ? alerts.filter((a) => a.zone_id === filterZone)
-    : alerts
-
+export function AlertFeed({
+  alerts,
+  loading,
+  onAcknowledged,
+  filterBar,
+  filterLabel = null,
+}: Props) {
   return (
     <div className="bg-panel border border-border rounded-lg flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-gray-300">
-          Active alerts {filterZone && (
+          Active alerts
+          {filterLabel && (
             <span className="text-suspect normal-case font-mono text-xs">
-              · zone {filterZone}
+              {' · '}{filterLabel}
             </span>
           )}
         </h2>
         <span className="text-xs font-mono text-gray-500">
-          {filtered.length} {filtered.length === 1 ? 'alert' : 'alerts'}
+          {alerts.length} {alerts.length === 1 ? 'alert' : 'alerts'}
         </span>
       </div>
+      {filterBar}
       <div className="flex-1 overflow-y-auto divide-y divide-border">
         {loading && (
           <div className="p-4 text-sm text-gray-500 font-mono">Loading…</div>
         )}
-        {!loading && filtered.length === 0 && (
+        {!loading && alerts.length === 0 && (
           <div className="p-4 text-sm text-gray-500 font-mono">
-            No active alerts.
+            No alerts to show.
           </div>
         )}
-        {filtered.map((alert) => (
+        {alerts.map((alert) => (
           <AlertRow key={alert.alert_id} alert={alert} onAcknowledged={onAcknowledged} />
         ))}
       </div>

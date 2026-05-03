@@ -1,13 +1,25 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api } from '../api/client'
 import { useApi } from '../hooks/useApi'
+import { AlertFilterBar } from '../components/AlertFilterBar'
 import { ClassificationBadge } from '../components/ClassificationBadge'
 import { formatDateTime } from '../lib/format'
+import { EMPTY_FILTER, filterAlerts, type AlertFilter } from '../lib/alertFilter'
 
 export default function AlertsPage() {
   const [showAcked, setShowAcked] = useState(false)
   const fetcher = showAcked ? api.alertsAll : api.alertsActive
   const alerts = useApi(fetcher, { intervalMs: 5000, deps: [showAcked] })
+
+  const [filter, setFilter] = useState<AlertFilter>(EMPTY_FILTER)
+  const allAlerts = alerts.data ?? []
+
+  // Pass null for the zone — clicking the building map is a Dashboard-only
+  // affordance. The bar will not display the zone chip.
+  const visibleAlerts = useMemo(
+    () => filterAlerts(allAlerts, filter, null),
+    [allAlerts, filter],
+  )
 
   return (
     <div className="max-w-7xl mx-auto px-4 py-6 space-y-4">
@@ -25,6 +37,13 @@ export default function AlertsPage() {
       </div>
 
       <div className="bg-panel border border-border rounded-lg overflow-hidden">
+        <AlertFilterBar
+          alerts={allAlerts}
+          filter={filter}
+          onChange={setFilter}
+          filteredCount={visibleAlerts.length}
+          totalCount={allAlerts.length}
+        />
         <table className="w-full text-sm">
           <thead className="bg-black/40 text-[10px] uppercase tracking-wider text-gray-500 font-mono">
             <tr>
@@ -45,14 +64,14 @@ export default function AlertsPage() {
                 </td>
               </tr>
             )}
-            {!alerts.loading && (alerts.data ?? []).length === 0 && (
+            {!alerts.loading && visibleAlerts.length === 0 && (
               <tr>
                 <td colSpan={7} className="px-3 py-4 text-gray-500 font-mono">
                   No alerts to show.
                 </td>
               </tr>
             )}
-            {(alerts.data ?? []).map((a) => (
+            {visibleAlerts.map((a) => (
               <tr key={a.alert_id} className="hover:bg-black/30">
                 <td className="px-3 py-2 text-xs font-mono text-gray-400 whitespace-nowrap">
                   {formatDateTime(a.created_at)}

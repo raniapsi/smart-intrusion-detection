@@ -18,6 +18,16 @@ Two commands:
        --topology dataset/topology/building_b1.yaml \\
        --baselines features/output/baselines.json \\
        --out features/output/test_forced_door.parquet
+
+3. 
+    for sc in badge_off_hours forced_door tailgating revoked_badge \
+          hybrid_intrusion camera_compromise credential_theft; do
+    python3 -m features.cli extract \
+        --events dataset/output/test_${sc}.jsonl \
+        --topology dataset/topology/building_b1.yaml \
+        --baselines features/output/baselines.json \
+        --out features/output/test_${sc}.parquet
+done
 """
 
 from __future__ import annotations
