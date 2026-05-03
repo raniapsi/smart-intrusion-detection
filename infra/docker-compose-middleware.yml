@@ -44,6 +44,28 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  timescaledb:
+    image: timescale/timescaledb:latest-pg16
+    container_name: timescaledb
+    ports:
+      - "5432:5432"
+    networks:
+      - middleware-net
+    environment:
+      POSTGRES_USER: iot
+      POSTGRES_PASSWORD: iot_secure_2026
+      POSTGRES_DB: iot_security
+    volumes:
+      - timescaledb-data:/var/lib/postgresql/data
+      - ./timescaledb/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U iot -d iot_security"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
   nodered:
     image: nodered/node-red:latest
     container_name: nodered
@@ -73,3 +95,4 @@ networks:
 
 volumes:
   nodered-data:
+  timescaledb-data:
