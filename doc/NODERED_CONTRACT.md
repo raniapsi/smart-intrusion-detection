@@ -293,5 +293,3 @@ Compatible (non-breaking) additions are allowed but require updating
 both sides simultaneously, because of `extra="forbid"`.
 
 ---
-
-*Maintained by Ilyes — last updated alongside step 8 of the AI engine.*
