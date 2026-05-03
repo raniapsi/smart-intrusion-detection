@@ -1,0 +1,36 @@
+version: "3.9"
+
+# Middleware layer (Layer 5) — Node-RED only
+#
+# Mosquitto is already defined in docker-compose_LOCAL.yml (ryan/pqc-transport).
+# Node-RED joins the same middleware-net and connects to mosquitto:9001 via WebSocket.
+#
+# Start order:
+#   1. docker compose -f docker-compose_LOCAL.yml up -d   (Ryan's stack: proxies + mosquitto)
+#   2. docker compose -f docker-compose-middleware.yml up -d  (this file)
+
+services:
+
+  nodered:
+    image: nodered/node-red:latest
+    container_name: nodered
+    ports:
+      - "1880:1880"
+    volumes:
+      - nodered-data:/data
+    networks:
+      - middleware-net
+    environment:
+      # Used when configuring MQTT nodes inside Node-RED flows
+      - MQTT_BROKER_HOST=mosquitto
+      - MQTT_BROKER_PORT=9001
+      - MQTT_PROTOCOL=ws   # Mosquitto listens on WebSocket (ryan's mosquitto.conf)
+    restart: unless-stopped
+
+networks:
+  middleware-net:
+    external: true
+    name: infra_middleware-net
+
+volumes:
+  nodered-data:
