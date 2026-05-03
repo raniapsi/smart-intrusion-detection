@@ -1,15 +1,48 @@
-version: "3.9"
-
-# Middleware layer (Layer 5) — Node-RED only
+# Middleware layer (Layer 5) — Node-RED + Kafka stack
 #
-# Mosquitto is already defined in docker-compose_LOCAL.yml (ryan/pqc-transport).
-# Node-RED joins the same middleware-net and connects to mosquitto:9001 via WebSocket.
+# Mosquitto is defined in docker-compose_LOCAL.yml (ryan/pqc-transport).
+# Node-RED connects to mosquitto:9001 via WebSocket on middleware-net.
 #
 # Start order:
-#   1. docker compose -f docker-compose_LOCAL.yml up -d   (Ryan's stack: proxies + mosquitto)
+#   1. docker compose -f docker-compose_LOCAL.yml up -d       (Ryan: proxies + mosquitto)
 #   2. docker compose -f docker-compose-middleware.yml up -d  (this file)
 
 services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    networks:
+      - middleware-net
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    restart: unless-stopped
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    networks:
+      - middleware-net
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # PLAINTEXT://kafka:9092 — internal name, reachable by Node-RED on middleware-net
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions --bootstrap-server kafka:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
 
   nodered:
     image: nodered/node-red:latest
@@ -20,16 +53,22 @@ services:
       - nodered-data:/data
     networks:
       - middleware-net
+    depends_on:
+      kafka:
+        condition: service_healthy
     environment:
-      # Used when configuring MQTT nodes inside Node-RED flows
-      - MQTT_BROKER_HOST=mosquitto
-      - MQTT_BROKER_PORT=9001
-      - MQTT_PROTOCOL=ws   # Mosquitto listens on WebSocket (ryan's mosquitto.conf)
+      # MQTT — Mosquitto (Ryan's stack) via WebSocket
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: 9001
+      MQTT_PROTOCOL: ws
+      # Kafka — used in Node-RED kafka out nodes (events.raw)
+      KAFKA_BROKER: kafka:9092
     restart: unless-stopped
 
 networks:
   middleware-net:
     external: true
+    # Created by docker-compose_LOCAL.yml (project=infra → real name: infra_middleware-net)
     name: infra_middleware-net
 
 volumes:

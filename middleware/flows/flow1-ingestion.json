@@ -1,369 +1,494 @@
 [
-  {
-    "id": "flow1tab00000001",
-    "type": "tab",
-    "label": "Flow 1 — MQTT Ingestion",
-    "disabled": false,
-    "info": "Subscribes to building/# on Mosquitto (WebSocket ws://mosquitto:9001).\nExtracts sensor type from topic → routes to per-type parser.\nEach parser validates required fields per NODERED_CONTRACT.md §5.\nOutput 1 of each parser = valid msg (→ Flow 2).\nOutput 2 of each parser = invalid msg (→ debug error)."
-  },
-  {
-    "id": "mqttbroker000001",
-    "type": "mqtt-broker",
-    "name": "Mosquitto WS (middleware-net)",
-    "broker": "ws://mosquitto",
-    "port": "9001",
-    "clientid": "nodered-flow1-ingestion",
-    "usetls": false,
-    "protocolVersion": "4",
-    "keepalive": "60",
-    "cleansession": true,
-    "birthTopic": "",
-    "birthQos": "0",
-    "birthPayload": "",
-    "birthRetain": "false",
-    "closeTopic": "",
-    "closeQos": "0",
-    "closePayload": "",
-    "closeRetain": "false",
-    "willTopic": "",
-    "willQos": "0",
-    "willPayload": "",
-    "willRetain": "false",
-    "userProps": "",
-    "sessionExpiry": ""
-  },
-  {
-    "id": "comment000000001",
-    "type": "comment",
-    "name": "Flow 1 — MQTT Multi-source Ingestion\nbroker: ws://mosquitto:9001 | topic: building/# | QoS 1 | MQTT 3.1.1\nContract: NODERED_CONTRACT.md §5",
-    "info": "",
-    "x": 240,
-    "y": 120,
-    "z": "flow1tab00000001",
-    "wires": []
-  },
-  {
-    "id": "mqttin000000001",
-    "type": "mqtt in",
-    "name": "building/# — all sensors",
-    "topic": "building/#",
-    "qos": "1",
-    "datatype": "json",
-    "broker": "mqttbroker000001",
-    "nl": false,
-    "rap": false,
-    "rh": 0,
-    "inputs": 0,
-    "x": 170,
-    "y": 300,
-    "z": "flow1tab00000001",
-    "wires": [["extracttype00001"]]
-  },
-  {
-    "id": "extracttype00001",
-    "type": "function",
-    "name": "Extract Sensor Type",
-    "func": "// Topic formats:\n//   building/{bId}/zone/{zId}/{type}/{devId}  → type in parts[4]\n//   building/{bId}/network/{subtype}           → type = 'network'\n\nconst parts = msg.topic.split('/');\n\n// Defensive JSON parse if payload arrived as string\nif (typeof msg.payload === 'string') {\n    try {\n        msg.payload = JSON.parse(msg.payload);\n    } catch (e) {\n        node.error('Invalid JSON payload on topic: ' + msg.topic, msg);\n        return null;\n    }\n}\n\nif (parts.length >= 4 && parts[2] === 'network') {\n    msg.sensorType    = 'network';\n    msg.networkSubtype = parts[3];   // 'flow' or 'alert'\n    msg.buildingId    = parts[1];\n    msg.zoneId        = null;\n    msg.deviceId      = parts[3];\n} else if (parts.length >= 6) {\n    msg.sensorType = parts[4];       // badge | door | motion | camera\n    msg.buildingId = parts[1];\n    msg.zoneId     = parts[3];\n    msg.deviceId   = parts[5];\n} else {\n    node.warn('Unrecognised topic structure: ' + msg.topic);\n    return null;\n}\n\nreturn msg;",
-    "outputs": 1,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 420,
-    "y": 300,
-    "z": "flow1tab00000001",
-    "wires": [["switch00000001"]]
-  },
-  {
-    "id": "switch00000001",
-    "type": "switch",
-    "name": "Route by sensorType",
-    "property": "sensorType",
-    "propertyType": "msg",
-    "rules": [
-      {"t": "eq", "v": "badge",   "vt": "str"},
-      {"t": "eq", "v": "door",    "vt": "str"},
-      {"t": "eq", "v": "motion",  "vt": "str"},
-      {"t": "eq", "v": "camera",  "vt": "str"},
-      {"t": "eq", "v": "network", "vt": "str"}
-    ],
-    "checkall": "false",
-    "repair": false,
-    "outputs": 5,
-    "x": 660,
-    "y": 300,
-    "z": "flow1tab00000001",
-    "wires": [
-      ["parsesbadge0001"],
-      ["parsedoor000001"],
-      ["parsemotion0001"],
-      ["parsecamera0001"],
-      ["parsenetwork0001"]
-    ]
-  },
-  {
-    "id": "parsesbadge0001",
-    "type": "function",
-    "name": "Parse Badge",
-    "func": "// BADGE_ACCESS — NODERED_CONTRACT.md §5.1\n// Required: badge_id, access_result\n// access_result ∈ {GRANTED, DENIED, TIMEOUT}\nconst p = msg.payload;\nconst VALID_RESULTS = ['GRANTED', 'DENIED', 'TIMEOUT'];\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nconst missing = ['badge_id', 'access_result'].filter(f => p[f] == null);\nif (missing.length) {\n    msg.validationError = 'Missing required fields: ' + missing.join(', ');\n    return [null, msg];\n}\nif (!VALID_RESULTS.includes(p.access_result)) {\n    msg.validationError = 'Invalid access_result: ' + p.access_result +\n        ' — expected one of ' + VALID_RESULTS.join('|');\n    return [null, msg];\n}\n\nreturn [msg, null];",
-    "outputs": 2,
-    "outputLabels": ["valid", "invalid"],
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 900,
-    "y": 80,
-    "z": "flow1tab00000001",
-    "wires": [
-      ["debugbadgeok0001"],
-      ["debugbadgeerr001"]
-    ]
-  },
-  {
-    "id": "debugbadgeok0001",
-    "type": "debug",
-    "name": "✓ badge — valid",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1130,
-    "y": 60,
-    "z": "flow1tab00000001",
-    "wires": []
-  },
-  {
-    "id": "debugbadgeerr001",
-    "type": "debug",
-    "name": "✗ badge — INVALID (check validationError)",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1170,
-    "y": 140,
-    "z": "flow1tab00000001",
-    "wires": []
-  },
-  {
-    "id": "parsedoor000001",
-    "type": "function",
-    "name": "Parse Door",
-    "func": "// DOOR_OPENED / DOOR_CLOSED / DOOR_FORCED — NODERED_CONTRACT.md §5.2\n// Required: door_id\n// Optional: duration_open_seconds (number if present)\nconst p = msg.payload;\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nif (!p.door_id) {\n    msg.validationError = 'Missing required field: door_id';\n    return [null, msg];\n}\nif (p.duration_open_seconds !== undefined && p.duration_open_seconds !== null) {\n    if (typeof p.duration_open_seconds !== 'number') {\n        msg.validationError = 'duration_open_seconds must be a number, got: ' +\n            typeof p.duration_open_seconds;\n        return [null, msg];\n    }\n}\n\nreturn [msg, null];",
-    "outputs": 2,
-    "outputLabels": ["valid", "invalid"],
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 900,
-    "y": 200,
-    "z": "flow1tab00000001",
-    "wires": [
-      ["debugdoorok00001"],
-      ["debugdoorerr0001"]
-    ]
-  },
-  {
-    "id": "debugdoorok00001",
-    "type": "debug",
-    "name": "✓ door — valid",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1120,
-    "y": 180,
-    "z": "flow1tab00000001",
-    "wires": []
-  },
-  {
-    "id": "debugdoorerr0001",
-    "type": "debug",
-    "name": "✗ door — INVALID (check validationError)",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1165,
-    "y": 260,
-    "z": "flow1tab00000001",
-    "wires": []
-  },
-  {
-    "id": "parsemotion0001",
-    "type": "function",
-    "name": "Parse Motion",
-    "func": "// MOTION_DETECTED — NODERED_CONTRACT.md §5.3\n// Required: detector_device_id\n// Optional: entity_count (integer >= 1 if present)\nconst p = msg.payload;\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nif (!p.detector_device_id) {\n    msg.validationError = 'Missing required field: detector_device_id';\n    return [null, msg];\n}\nif (p.entity_count !== undefined && p.entity_count !== null) {\n    if (!Number.isInteger(p.entity_count) || p.entity_count < 1) {\n        msg.validationError = 'entity_count must be an integer >= 1, got: ' + p.entity_count;\n        return [null, msg];\n    }\n}\n\nreturn [msg, null];",
-    "outputs": 2,
-    "outputLabels": ["valid", "invalid"],
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 900,
-    "y": 320,
-    "z": "flow1tab00000001",
-    "wires": [
-      ["debugmotionok0001"],
-      ["debugmotionerr001"]
-    ]
-  },
-  {
-    "id": "debugmotionok0001",
-    "type": "debug",
-    "name": "✓ motion — valid",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1130,
-    "y": 300,
-    "z": "flow1tab00000001",
-    "wires": []
-  },
-  {
-    "id": "debugmotionerr001",
-    "type": "debug",
-    "name": "✗ motion — INVALID (check validationError)",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1170,
-    "y": 380,
-    "z": "flow1tab00000001",
-    "wires": []
-  },
-  {
-    "id": "parsecamera0001",
-    "type": "function",
-    "name": "Parse Camera",
-    "func": "// CAMERA_EVENT — NODERED_CONTRACT.md §5.6\n// Required: camera_device_id, event_subtype\n// Optional: snapshot_url\nconst p = msg.payload;\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nconst missing = ['camera_device_id', 'event_subtype'].filter(f => !p[f]);\nif (missing.length) {\n    msg.validationError = 'Missing required fields: ' + missing.join(', ');\n    return [null, msg];\n}\n// snapshot_url is optional (string or null)\nif (p.snapshot_url !== undefined && p.snapshot_url !== null &&\n    typeof p.snapshot_url !== 'string') {\n    msg.validationError = 'snapshot_url must be a string or null';\n    return [null, msg];\n}\n\nreturn [msg, null];",
-    "outputs": 2,
-    "outputLabels": ["valid", "invalid"],
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 900,
-    "y": 440,
-    "z": "flow1tab00000001",
-    "wires": [
-      ["debugcameraok0001"],
-      ["debugcameraerr001"]
-    ]
-  },
-  {
-    "id": "debugcameraok0001",
-    "type": "debug",
-    "name": "✓ camera — valid",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1130,
-    "y": 420,
-    "z": "flow1tab00000001",
-    "wires": []
-  },
-  {
-    "id": "debugcameraerr001",
-    "type": "debug",
-    "name": "✗ camera — INVALID (check validationError)",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1165,
-    "y": 500,
-    "z": "flow1tab00000001",
-    "wires": []
-  },
-  {
-    "id": "parsenetwork0001",
-    "type": "function",
-    "name": "Parse Network",
-    "func": "// NETWORK_FLOW (§5.4) or NETWORK_ANOMALY (§5.5)\n// Dispatched via msg.networkSubtype set by Extract Sensor Type:\n//   topic building/B1/network/flow  → subtype = 'flow'\n//   topic building/B1/network/alert → subtype = 'alert'\nconst p = msg.payload;\nconst subtype = msg.networkSubtype || '';\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\n\nif (subtype === 'flow') {\n    // NETWORK_FLOW required fields\n    const PROTOCOLS = ['TCP', 'UDP', 'ICMP'];\n    const required  = ['src_ip', 'dst_ip', 'protocol', 'bytes_sent', 'bytes_received'];\n    const missing   = required.filter(f => p[f] == null);\n    if (missing.length) {\n        msg.validationError = 'Missing required fields: ' + missing.join(', ');\n        return [null, msg];\n    }\n    if (!PROTOCOLS.includes(p.protocol)) {\n        msg.validationError = 'Invalid protocol: ' + p.protocol +\n            ' — expected one of ' + PROTOCOLS.join('|');\n        return [null, msg];\n    }\n    if (!Number.isInteger(p.bytes_sent) || p.bytes_sent < 0) {\n        msg.validationError = 'bytes_sent must be integer >= 0';\n        return [null, msg];\n    }\n    if (!Number.isInteger(p.bytes_received) || p.bytes_received < 0) {\n        msg.validationError = 'bytes_received must be integer >= 0';\n        return [null, msg];\n    }\n\n} else if (subtype === 'alert') {\n    // NETWORK_ANOMALY required fields\n    const LABELS = ['PORT_SCAN','EXFILTRATION','C2_BEACON','LATERAL_MOVEMENT','DOS','UNKNOWN'];\n    if (!p.label) {\n        msg.validationError = 'Missing required field: label';\n        return [null, msg];\n    }\n    if (!LABELS.includes(p.label)) {\n        msg.validationError = 'Invalid label: ' + p.label +\n            ' — expected one of ' + LABELS.join('|');\n        return [null, msg];\n    }\n    if (!p.evidence) {\n        msg.validationError = 'Missing required field: evidence';\n        return [null, msg];\n    }\n\n} else {\n    msg.validationError = 'Unknown network subtype: \"' + subtype +\n        '\" — expected \"flow\" or \"alert\"';\n    return [null, msg];\n}\n\nreturn [msg, null];",
-    "outputs": 2,
-    "outputLabels": ["valid", "invalid"],
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 900,
-    "y": 560,
-    "z": "flow1tab00000001",
-    "wires": [
-      ["debugnetworkvalid1"],
-      ["debugnetworkerr01"]
-    ]
-  },
-  {
-    "id": "debugnetworkvalid1",
-    "type": "debug",
-    "name": "✓ network — valid",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1130,
-    "y": 540,
-    "z": "flow1tab00000001",
-    "wires": []
-  },
-  {
-    "id": "debugnetworkerr01",
-    "type": "debug",
-    "name": "✗ network — INVALID (check validationError)",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 1165,
-    "y": 620,
-    "z": "flow1tab00000001",
-    "wires": []
-  }
+    {
+        "id": "flow1tab00000001",
+        "type": "tab",
+        "label": "Flow 1 — MQTT Ingestion",
+        "disabled": false,
+        "info": "Subscribes to building/# on Mosquitto (WebSocket ws://mosquitto:9001).\nExtracts sensor type from topic → routes to per-type parser.\nEach parser validates required fields per NODERED_CONTRACT.md §5.\nOutput 1 of each parser = valid msg (→ Flow 2).\nOutput 2 of each parser = invalid msg (→ debug error)."
+    },
+    {
+        "id": "comment000000001",
+        "type": "comment",
+        "z": "flow1tab00000001",
+        "name": "Flow 1 — MQTT Multi-source Ingestion\nbroker: ws://mosquitto:9001 | topic: building/# | QoS 1 | MQTT 3.1.1\nContract: NODERED_CONTRACT.md §5",
+        "info": "",
+        "x": 240,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "mqttin000000001",
+        "type": "mqtt in",
+        "z": "flow1tab00000001",
+        "name": "building/# — all sensors",
+        "topic": "building/#",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "fa340bc84e96754e",
+        "nl": false,
+        "rap": false,
+        "rh": 0,
+        "inputs": 0,
+        "x": 170,
+        "y": 300,
+        "wires": [
+            [
+                "extracttype00001"
+            ]
+        ]
+    },
+    {
+        "id": "extracttype00001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Extract Sensor Type",
+        "func": "// Topic formats:\n//   building/{bId}/zone/{zId}/{type}/{devId}  → type in parts[4]\n//   building/{bId}/network/{subtype}           → type = 'network'\n\nconst parts = msg.topic.split('/');\n\n// Defensive JSON parse if payload arrived as string\nif (typeof msg.payload === 'string') {\n    try {\n        msg.payload = JSON.parse(msg.payload);\n    } catch (e) {\n        node.error('Invalid JSON payload on topic: ' + msg.topic, msg);\n        return null;\n    }\n}\n\nif (parts.length >= 4 && parts[2] === 'network') {\n    msg.sensorType    = 'network';\n    msg.networkSubtype = parts[3];   // 'flow' or 'alert'\n    msg.buildingId    = parts[1];\n    msg.zoneId        = null;\n    msg.deviceId      = parts[3];\n} else if (parts.length >= 6) {\n    msg.sensorType = parts[4];       // badge | door | motion | camera\n    msg.buildingId = parts[1];\n    msg.zoneId     = parts[3];\n    msg.deviceId   = parts[5];\n} else {\n    node.warn('Unrecognised topic structure: ' + msg.topic);\n    return null;\n}\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 420,
+        "y": 300,
+        "wires": [
+            [
+                "switch00000001"
+            ]
+        ]
+    },
+    {
+        "id": "switch00000001",
+        "type": "switch",
+        "z": "flow1tab00000001",
+        "name": "Route by sensorType",
+        "property": "sensorType",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "badge",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "door",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "motion",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "camera",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "network",
+                "vt": "str"
+            }
+        ],
+        "checkall": "false",
+        "repair": false,
+        "outputs": 5,
+        "x": 660,
+        "y": 300,
+        "wires": [
+            [
+                "parsesbadge0001"
+            ],
+            [
+                "parsedoor000001"
+            ],
+            [
+                "parsemotion0001"
+            ],
+            [
+                "parsecamera0001"
+            ],
+            [
+                "parsenetwork0001"
+            ]
+        ]
+    },
+    {
+        "id": "parsesbadge0001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Parse Badge",
+        "func": "// BADGE_ACCESS — NODERED_CONTRACT.md §5.1\n// Required: badge_id, access_result\n// access_result ∈ {GRANTED, DENIED, TIMEOUT}\nconst p = msg.payload;\nconst VALID_RESULTS = ['GRANTED', 'DENIED', 'TIMEOUT'];\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nconst missing = ['badge_id', 'access_result'].filter(f => p[f] == null);\nif (missing.length) {\n    msg.validationError = 'Missing required fields: ' + missing.join(', ');\n    return [null, msg];\n}\nif (!VALID_RESULTS.includes(p.access_result)) {\n    msg.validationError = 'Invalid access_result: ' + p.access_result +\n        ' — expected one of ' + VALID_RESULTS.join('|');\n    return [null, msg];\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 910,
+        "y": 100,
+        "wires": [
+            [
+                "debugbadgeok0001",
+                "67bea9173062bc60"
+            ],
+            [
+                "debugbadgeerr001"
+            ]
+        ],
+        "outputLabels": [
+            "valid",
+            "invalid"
+        ]
+    },
+    {
+        "id": "debugbadgeok0001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✓ badge — valid",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1130,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "debugbadgeerr001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✗ badge — INVALID (check validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1170,
+        "y": 140,
+        "wires": []
+    },
+    {
+        "id": "parsedoor000001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Parse Door",
+        "func": "// DOOR_OPENED / DOOR_CLOSED / DOOR_FORCED — NODERED_CONTRACT.md §5.2\n// Required: door_id\n// Optional: duration_open_seconds (number if present)\nconst p = msg.payload;\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nif (!p.door_id) {\n    msg.validationError = 'Missing required field: door_id';\n    return [null, msg];\n}\nif (p.duration_open_seconds !== undefined && p.duration_open_seconds !== null) {\n    if (typeof p.duration_open_seconds !== 'number') {\n        msg.validationError = 'duration_open_seconds must be a number, got: ' +\n            typeof p.duration_open_seconds;\n        return [null, msg];\n    }\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 200,
+        "wires": [
+            [
+                "debugdoorok00001",
+                "67bea9173062bc60"
+            ],
+            [
+                "debugdoorerr0001"
+            ]
+        ],
+        "outputLabels": [
+            "valid",
+            "invalid"
+        ]
+    },
+    {
+        "id": "debugdoorok00001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✓ door — valid",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1120,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "debugdoorerr0001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✗ door — INVALID (check validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1165,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "parsemotion0001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Parse Motion",
+        "func": "// MOTION_DETECTED — NODERED_CONTRACT.md §5.3\n// Required: detector_device_id\n// Optional: entity_count (integer >= 1 if present)\nconst p = msg.payload;\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nif (!p.detector_device_id) {\n    msg.validationError = 'Missing required field: detector_device_id';\n    return [null, msg];\n}\nif (p.entity_count !== undefined && p.entity_count !== null) {\n    if (!Number.isInteger(p.entity_count) || p.entity_count < 1) {\n        msg.validationError = 'entity_count must be an integer >= 1, got: ' + p.entity_count;\n        return [null, msg];\n    }\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 320,
+        "wires": [
+            [
+                "debugmotionok0001",
+                "67bea9173062bc60"
+            ],
+            [
+                "debugmotionerr001"
+            ]
+        ],
+        "outputLabels": [
+            "valid",
+            "invalid"
+        ]
+    },
+    {
+        "id": "debugmotionok0001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✓ motion — valid",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1130,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "debugmotionerr001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✗ motion — INVALID (check validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1170,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "parsecamera0001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Parse Camera",
+        "func": "// CAMERA_EVENT — NODERED_CONTRACT.md §5.6\n// Required: camera_device_id, event_subtype\n// Optional: snapshot_url\nconst p = msg.payload;\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nconst missing = ['camera_device_id', 'event_subtype'].filter(f => !p[f]);\nif (missing.length) {\n    msg.validationError = 'Missing required fields: ' + missing.join(', ');\n    return [null, msg];\n}\n// snapshot_url is optional (string or null)\nif (p.snapshot_url !== undefined && p.snapshot_url !== null &&\n    typeof p.snapshot_url !== 'string') {\n    msg.validationError = 'snapshot_url must be a string or null';\n    return [null, msg];\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 440,
+        "wires": [
+            [
+                "debugcameraok0001",
+                "67bea9173062bc60"
+            ],
+            [
+                "debugcameraerr001"
+            ]
+        ],
+        "outputLabels": [
+            "valid",
+            "invalid"
+        ]
+    },
+    {
+        "id": "debugcameraok0001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✓ camera — valid",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1130,
+        "y": 420,
+        "wires": []
+    },
+    {
+        "id": "debugcameraerr001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✗ camera — INVALID (check validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1165,
+        "y": 500,
+        "wires": []
+    },
+    {
+        "id": "parsenetwork0001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Parse Network",
+        "func": "// NETWORK_FLOW (§5.4) or NETWORK_ANOMALY (§5.5)\n// Dispatched via msg.networkSubtype set by Extract Sensor Type:\n//   topic building/B1/network/flow  → subtype = 'flow'\n//   topic building/B1/network/alert → subtype = 'alert'\nconst p = msg.payload;\nconst subtype = msg.networkSubtype || '';\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\n\nif (subtype === 'flow') {\n    // NETWORK_FLOW required fields\n    const PROTOCOLS = ['TCP', 'UDP', 'ICMP'];\n    const required  = ['src_ip', 'dst_ip', 'protocol', 'bytes_sent', 'bytes_received'];\n    const missing   = required.filter(f => p[f] == null);\n    if (missing.length) {\n        msg.validationError = 'Missing required fields: ' + missing.join(', ');\n        return [null, msg];\n    }\n    if (!PROTOCOLS.includes(p.protocol)) {\n        msg.validationError = 'Invalid protocol: ' + p.protocol +\n            ' — expected one of ' + PROTOCOLS.join('|');\n        return [null, msg];\n    }\n    if (!Number.isInteger(p.bytes_sent) || p.bytes_sent < 0) {\n        msg.validationError = 'bytes_sent must be integer >= 0';\n        return [null, msg];\n    }\n    if (!Number.isInteger(p.bytes_received) || p.bytes_received < 0) {\n        msg.validationError = 'bytes_received must be integer >= 0';\n        return [null, msg];\n    }\n\n} else if (subtype === 'alert') {\n    // NETWORK_ANOMALY required fields\n    const LABELS = ['PORT_SCAN','EXFILTRATION','C2_BEACON','LATERAL_MOVEMENT','DOS','UNKNOWN'];\n    if (!p.label) {\n        msg.validationError = 'Missing required field: label';\n        return [null, msg];\n    }\n    if (!LABELS.includes(p.label)) {\n        msg.validationError = 'Invalid label: ' + p.label +\n            ' — expected one of ' + LABELS.join('|');\n        return [null, msg];\n    }\n    if (!p.evidence) {\n        msg.validationError = 'Missing required field: evidence';\n        return [null, msg];\n    }\n\n} else {\n    msg.validationError = 'Unknown network subtype: \"' + subtype +\n        '\" — expected \"flow\" or \"alert\"';\n    return [null, msg];\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 560,
+        "wires": [
+            [
+                "debugnetworkvalid1",
+                "67bea9173062bc60"
+            ],
+            [
+                "debugnetworkerr01"
+            ]
+        ],
+        "outputLabels": [
+            "valid",
+            "invalid"
+        ]
+    },
+    {
+        "id": "debugnetworkvalid1",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✓ network — valid",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1130,
+        "y": 540,
+        "wires": []
+    },
+    {
+        "id": "debugnetworkerr01",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✗ network — INVALID (check validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1165,
+        "y": 620,
+        "wires": []
+    },
+    {
+        "id": "67bea9173062bc60",
+        "type": "link out",
+        "z": "flow1tab00000001",
+        "name": "To Flow 2",
+        "mode": "link",
+        "links": [
+            "linkin200000001"
+        ],
+        "x": 1465,
+        "y": 340,
+        "wires": []
+    },
+    {
+        "id": "6c28ec586ef4e02b",
+        "type": "inject",
+        "z": "flow1tab00000001",
+        "name": "",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "building/B1/zone/Z3/badge/R-Z3-01",
+        "payload": "{\"badge_id\":\"b042\",\"user_id\":\"u042\",\"access_result\":\"GRANTED\",\"reader_device_id\":\"R-Z3-01\",\"timestamp\":\"2026-05-03T09:02:14.512Z\"}",
+        "payloadType": "json",
+        "x": 210,
+        "y": 500,
+        "wires": [
+            [
+                "extracttype00001"
+            ]
+        ]
+    },
+    {
+        "id": "fa340bc84e96754e",
+        "type": "mqtt-broker",
+        "name": "",
+        "broker": "ws://mosquitto",
+        "port": "9001",
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    }
 ]

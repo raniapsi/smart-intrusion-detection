@@ -1,107 +1,194 @@
 [
-  {
-    "id": "flow2tab00000001",
-    "type": "tab",
-    "label": "Flow 2 — Normalisation",
-    "disabled": false,
-    "info": "Receives validated raw events from Flow 1 via link in.\nProduces a UnifiedEvent conforming to NODERED_CONTRACT.md:\n  - 13 required fields present\n  - ai_score / ai_classification MUST NOT be set (Pydantic extra=forbid)\n  - payload.kind == event_type (discriminated union)\n  - schema_version: 1.0.0\n\nTo wire up: in Flow 1, add a 'link out' after each parser output 1 (valid),\npoint them all to the link in node id: linkin200000001"
-  },
-  {
-    "id": "comment2000000001",
-    "type": "comment",
-    "name": "Flow 2 — Normalisation & Enrichment\nInput: validated raw events from Flow 1 (via link in)\nOutput: UnifiedEvent ready for Kafka events.raw\nContract: NODERED_CONTRACT.md — 13 fields, extra=forbid",
-    "info": "",
-    "x": 260,
-    "y": 120,
-    "z": "flow2tab00000001",
-    "wires": []
-  },
-  {
-    "id": "comment2000000002",
-    "type": "comment",
-    "name": "HOW TO CONNECT FLOW 1:\nAdd a 'link out' node after each parser valid output in Flow 1.\nSet each link out target to this link in node (id: linkin200000001).",
-    "info": "",
-    "x": 240,
-    "y": 180,
-    "z": "flow2tab00000001",
-    "wires": []
-  },
-  {
-    "id": "linkin200000001",
-    "type": "link in",
-    "name": "From Flow 1 — validated events",
-    "links": [],
-    "x": 135,
-    "y": 300,
-    "z": "flow2tab00000001",
-    "wires": [["normalize200001"]]
-  },
-  {
-    "id": "normalize200001",
-    "type": "function",
-    "name": "Normalize to UnifiedEvent",
-    "func": "// Flow 1 sets on msg: sensorType, networkSubtype, buildingId, zoneId, deviceId\n// msg.payload = validated raw sensor payload\nconst { randomUUID } = require('crypto');\nconst p          = msg.payload;\nconst sensorType = msg.sensorType     || '';\nconst netSubtype = msg.networkSubtype || '';\nconst buildingId = msg.buildingId     || 'B1';\nconst zoneId     = msg.zoneId         || 'GLOBAL'; // network events carry no zone in topic\nconst deviceId   = msg.deviceId       || 'UNKNOWN';\n\n// ── 1. event_type ────────────────────────────────────────────────────\nlet eventType;\nswitch (sensorType) {\n    case 'badge':   eventType = 'BADGE_ACCESS';   break;\n    case 'motion':  eventType = 'MOTION_DETECTED'; break;\n    case 'camera':  eventType = 'CAMERA_EVENT';    break;\n    case 'network': eventType = netSubtype === 'alert' ? 'NETWORK_ANOMALY' : 'NETWORK_FLOW'; break;\n    case 'door': {\n        const s = (p.state || '').toUpperCase();\n        eventType = s === 'FORCED'                    ? 'DOOR_FORCED'\n                  : (s === 'CLOSE' || s === 'CLOSED') ? 'DOOR_CLOSED'\n                  : 'DOOR_OPENED';\n        break;\n    }\n    default:\n        node.error('Unknown sensorType: ' + sensorType, msg);\n        return null;\n}\n\n// ── 2. source_layer ──────────────────────────────────────────────────\nconst sourceLayer = sensorType === 'network' ? 'CYBER' : 'PHYSICAL';\n\n// ── 3. severity_raw ──────────────────────────────────────────────────\nlet severityRaw = 'INFO';\nif (eventType === 'BADGE_ACCESS' &&\n    (p.access_result === 'DENIED' || p.access_result === 'TIMEOUT')) {\n    severityRaw = 'WARNING';\n} else if (eventType === 'DOOR_FORCED' || eventType === 'NETWORK_ANOMALY') {\n    severityRaw = 'ALERT';\n}\n\n// ── 4. payload (kind MUST equal event_type — Pydantic discriminated union) ──\nlet normalizedPayload;\nif (eventType === 'BADGE_ACCESS') {\n    normalizedPayload = {\n        kind:             eventType,\n        badge_id:         p.badge_id,\n        reader_device_id: p.reader_device_id || deviceId,\n        access_result:    p.access_result\n    };\n} else if (eventType === 'DOOR_OPENED' ||\n           eventType === 'DOOR_CLOSED' ||\n           eventType === 'DOOR_FORCED') {\n    normalizedPayload = { kind: eventType, door_id: p.door_id };\n    if (p.duration_open_seconds != null) {\n        normalizedPayload.duration_open_seconds = p.duration_open_seconds;\n    }\n} else if (eventType === 'MOTION_DETECTED') {\n    normalizedPayload = {\n        kind:               eventType,\n        detector_device_id: p.detector_device_id\n    };\n    if (p.entity_count != null) {\n        normalizedPayload.entity_count = p.entity_count;\n    }\n} else if (eventType === 'CAMERA_EVENT') {\n    normalizedPayload = {\n        kind:             eventType,\n        camera_device_id: p.camera_device_id,\n        event_subtype:    p.event_subtype,\n        snapshot_url:     p.snapshot_url != null ? p.snapshot_url : null\n    };\n} else if (eventType === 'NETWORK_FLOW') {\n    normalizedPayload = {\n        kind:               eventType,\n        src_ip:             p.src_ip,\n        dst_ip:             p.dst_ip,\n        dst_port:           p.dst_port           != null ? p.dst_port           : null,\n        protocol:           p.protocol,\n        bytes_sent:         p.bytes_sent,\n        bytes_received:     p.bytes_received,\n        duration_seconds:   p.duration_seconds   != null ? p.duration_seconds   : null,\n        distinct_dst_ports: p.distinct_dst_ports  != null ? p.distinct_dst_ports : null\n    };\n} else if (eventType === 'NETWORK_ANOMALY') {\n    normalizedPayload = {\n        kind:     eventType,\n        label:    p.label,\n        evidence: p.evidence\n    };\n}\n\n// ── 5. Assemble the 13-field UnifiedEvent ────────────────────────────\n// ai_score and ai_classification MUST NOT be present (Pydantic extra='forbid')\n// The AI engine fills them downstream after consuming events.raw.\nmsg.payload = {\n    event_id:            randomUUID(),\n    event_type:          eventType,\n    source_layer:        sourceLayer,\n    timestamp:           p.timestamp || new Date().toISOString(),\n    building_id:         buildingId,\n    zone_id:             zoneId,\n    device_id:           deviceId,\n    user_id:             p.user_id != null ? p.user_id : null,\n    severity_raw:        severityRaw,\n    payload:             normalizedPayload,\n    correlated_events:   [],\n    schema_version:      '1.0.0',\n    ingestion_timestamp: new Date().toISOString()\n};\n\nreturn msg;",
-    "outputs": 1,
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 390,
-    "y": 300,
-    "z": "flow2tab00000001",
-    "wires": [["validate200001"]]
-  },
-  {
-    "id": "validate200001",
-    "type": "function",
-    "name": "Validate before Kafka",
-    "func": "// Final gate before events.raw — mirrors Pydantic constraints (extra='forbid')\nconst e = msg.payload;\n\nconst REQUIRED = [\n    'event_id', 'event_type', 'source_layer', 'timestamp',\n    'building_id', 'zone_id', 'device_id', 'user_id',\n    'severity_raw', 'payload', 'correlated_events',\n    'schema_version', 'ingestion_timestamp'\n];\nconst PROHIBITED = ['ai_score', 'ai_classification'];\n\n// All 13 required fields must be defined\n// user_id: null is valid (contract allows null) — only undefined is rejected\nconst missing = REQUIRED.filter(f => e[f] === undefined);\nif (missing.length) {\n    msg.validationError = 'Missing required fields: ' + missing.join(', ');\n    return [null, msg];\n}\n\n// Prohibited fields must be absent — AI engine fills these downstream\nconst forbidden = PROHIBITED.filter(f => e[f] !== undefined);\nif (forbidden.length) {\n    msg.validationError = 'Prohibited fields present (AI engine fills them): ' + forbidden.join(', ');\n    return [null, msg];\n}\n\n// payload.kind must equal event_type (Pydantic discriminated union)\nif (!e.payload || e.payload.kind !== e.event_type) {\n    msg.validationError =\n        'payload.kind (' + (e.payload && e.payload.kind) + ')' +\n        ' != event_type (' + e.event_type + ')';\n    return [null, msg];\n}\n\n// correlated_events must be an array (may be empty)\nif (!Array.isArray(e.correlated_events)) {\n    msg.validationError = 'correlated_events must be an array, got: ' + typeof e.correlated_events;\n    return [null, msg];\n}\n\n// schema_version must be pinned to contract version\nif (e.schema_version !== '1.0.0') {\n    msg.validationError = 'schema_version must be \"1.0.0\", got: ' + e.schema_version;\n    return [null, msg];\n}\n\nreturn [msg, null];",
-    "outputs": 2,
-    "outputLabels": ["valid — ready for Kafka", "invalid — check validationError"],
-    "noerr": 0,
-    "initialize": "",
-    "finalize": "",
-    "libs": [],
-    "x": 670,
-    "y": 300,
-    "z": "flow2tab00000001",
-    "wires": [
-      ["debugvalid200001"],
-      ["debuginvalid20001"]
-    ]
-  },
-  {
-    "id": "debugvalid200001",
-    "type": "debug",
-    "name": "✓ UnifiedEvent ready",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 930,
-    "y": 240,
-    "z": "flow2tab00000001",
-    "wires": []
-  },
-  {
-    "id": "debuginvalid20001",
-    "type": "debug",
-    "name": "✗ Normalisation error (check msg.validationError)",
-    "active": true,
-    "tosidebar": true,
-    "console": false,
-    "tostatus": false,
-    "complete": "true",
-    "targetType": "full",
-    "statusVal": "",
-    "statusType": "auto",
-    "x": 980,
-    "y": 360,
-    "z": "flow2tab00000001",
-    "wires": []
-  }
+    {
+        "id": "flow2tab00000001",
+        "type": "tab",
+        "label": "Flow 2 — Normalisation",
+        "disabled": false,
+        "info": "Receives validated raw events from Flow 1 via link in.\nProduces a UnifiedEvent conforming to NODERED_CONTRACT.md:\n  - 13 required fields present\n  - ai_score / ai_classification MUST NOT be set (Pydantic extra=forbid)\n  - payload.kind == event_type (discriminated union)\n  - schema_version: 1.0.0\n\nTo wire up: in Flow 1, add a 'link out' after each parser output 1 (valid),\npoint them all to the link in node id: linkin200000001"
+    },
+    {
+        "id": "comment2000000001",
+        "type": "comment",
+        "z": "flow2tab00000001",
+        "name": "Flow 2 — Normalisation & Enrichment\nInput: validated raw events from Flow 1 (via link in)\nOutput: UnifiedEvent ready for Kafka events.raw\nContract: NODERED_CONTRACT.md — 13 fields, extra=forbid",
+        "info": "",
+        "x": 260,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "comment2000000002",
+        "type": "comment",
+        "z": "flow2tab00000001",
+        "name": "HOW TO CONNECT FLOW 1:\nAdd a 'link out' node after each parser valid output in Flow 1.\nSet each link out target to this link in node (id: linkin200000001).",
+        "info": "",
+        "x": 240,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "linkin200000001",
+        "type": "link in",
+        "z": "flow2tab00000001",
+        "name": "From Flow 1 — validated events",
+        "links": [
+            "67bea9173062bc60"
+        ],
+        "x": 135,
+        "y": 300,
+        "wires": [
+            [
+                "normalize200001"
+            ]
+        ]
+    },
+    {
+        "id": "normalize200001",
+        "type": "function",
+        "z": "flow2tab00000001",
+        "name": "Normalize to UnifiedEvent",
+        "func": "// Flow 1 sets on msg: sensorType, networkSubtype, buildingId, zoneId, deviceId\n// msg.payload = validated raw sensor payload\n// crypto.randomUUID not available in Node-RED function sandbox\n   // Use simple UUID v4 generator instead\n   function uuidv4() {\n       return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n           var r = Math.random() * 16 | 0;\n           var v = c === 'x' ? r : (r & 0x3 | 0x8);\n           return v.toString(16);\n       });\n   }\nconst p          = msg.payload;\nconst sensorType = msg.sensorType     || '';\nconst netSubtype = msg.networkSubtype || '';\nconst buildingId = msg.buildingId     || 'B1';\nconst zoneId     = msg.zoneId         || 'GLOBAL'; // network events carry no zone in topic\nconst deviceId   = msg.deviceId       || 'UNKNOWN';\n\n// ── 1. event_type ────────────────────────────────────────────────────\nlet eventType;\nswitch (sensorType) {\n    case 'badge':   eventType = 'BADGE_ACCESS';   break;\n    case 'motion':  eventType = 'MOTION_DETECTED'; break;\n    case 'camera':  eventType = 'CAMERA_EVENT';    break;\n    case 'network': eventType = netSubtype === 'alert' ? 'NETWORK_ANOMALY' : 'NETWORK_FLOW'; break;\n    case 'door': {\n        const s = (p.state || '').toUpperCase();\n        eventType = s === 'FORCED'                    ? 'DOOR_FORCED'\n                  : (s === 'CLOSE' || s === 'CLOSED') ? 'DOOR_CLOSED'\n                  : 'DOOR_OPENED';\n        break;\n    }\n    default:\n        node.error('Unknown sensorType: ' + sensorType, msg);\n        return null;\n}\n\n// ── 2. source_layer ──────────────────────────────────────────────────\nconst sourceLayer = sensorType === 'network' ? 'CYBER' : 'PHYSICAL';\n\n// ── 3. severity_raw ──────────────────────────────────────────────────\nlet severityRaw = 'INFO';\nif (eventType === 'BADGE_ACCESS' &&\n    (p.access_result === 'DENIED' || p.access_result === 'TIMEOUT')) {\n    severityRaw = 'WARNING';\n} else if (eventType === 'DOOR_FORCED' || eventType === 'NETWORK_ANOMALY') {\n    severityRaw = 'ALERT';\n}\n\n// ── 4. payload (kind MUST equal event_type — Pydantic discriminated union) ──\nlet normalizedPayload;\nif (eventType === 'BADGE_ACCESS') {\n    normalizedPayload = {\n        kind:             eventType,\n        badge_id:         p.badge_id,\n        reader_device_id: p.reader_device_id || deviceId,\n        access_result:    p.access_result\n    };\n} else if (eventType === 'DOOR_OPENED' ||\n           eventType === 'DOOR_CLOSED' ||\n           eventType === 'DOOR_FORCED') {\n    normalizedPayload = { kind: eventType, door_id: p.door_id };\n    if (p.duration_open_seconds != null) {\n        normalizedPayload.duration_open_seconds = p.duration_open_seconds;\n    }\n} else if (eventType === 'MOTION_DETECTED') {\n    normalizedPayload = {\n        kind:               eventType,\n        detector_device_id: p.detector_device_id\n    };\n    if (p.entity_count != null) {\n        normalizedPayload.entity_count = p.entity_count;\n    }\n} else if (eventType === 'CAMERA_EVENT') {\n    normalizedPayload = {\n        kind:             eventType,\n        camera_device_id: p.camera_device_id,\n        event_subtype:    p.event_subtype,\n        snapshot_url:     p.snapshot_url != null ? p.snapshot_url : null\n    };\n} else if (eventType === 'NETWORK_FLOW') {\n    normalizedPayload = {\n        kind:               eventType,\n        src_ip:             p.src_ip,\n        dst_ip:             p.dst_ip,\n        dst_port:           p.dst_port           != null ? p.dst_port           : null,\n        protocol:           p.protocol,\n        bytes_sent:         p.bytes_sent,\n        bytes_received:     p.bytes_received,\n        duration_seconds:   p.duration_seconds   != null ? p.duration_seconds   : null,\n        distinct_dst_ports: p.distinct_dst_ports  != null ? p.distinct_dst_ports : null\n    };\n} else if (eventType === 'NETWORK_ANOMALY') {\n    normalizedPayload = {\n        kind:     eventType,\n        label:    p.label,\n        evidence: p.evidence\n    };\n}\n\n// ── 5. Assemble the 13-field UnifiedEvent ────────────────────────────\n// ai_score and ai_classification MUST NOT be present (Pydantic extra='forbid')\n// The AI engine fills them downstream after consuming events.raw.\nmsg.payload = {\n    event_id:            uuidv4(),\n    event_type:          eventType,\n    source_layer:        sourceLayer,\n    timestamp:           p.timestamp || new Date().toISOString(),\n    building_id:         buildingId,\n    zone_id:             zoneId,\n    device_id:           deviceId,\n    user_id:             p.user_id != null ? p.user_id : null,\n    severity_raw:        severityRaw,\n    payload:             normalizedPayload,\n    correlated_events:   [],\n    schema_version:      '1.0.0',\n    ingestion_timestamp: new Date().toISOString()\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 390,
+        "y": 300,
+        "wires": [
+            [
+                "validate200001"
+            ]
+        ]
+    },
+    {
+        "id": "validate200001",
+        "type": "function",
+        "z": "flow2tab00000001",
+        "name": "Validate before Kafka",
+        "func": "// Final gate before events.raw — mirrors Pydantic constraints (extra='forbid')\nconst e = msg.payload;\n\nconst REQUIRED = [\n    'event_id', 'event_type', 'source_layer', 'timestamp',\n    'building_id', 'zone_id', 'device_id', 'user_id',\n    'severity_raw', 'payload', 'correlated_events',\n    'schema_version', 'ingestion_timestamp'\n];\nconst PROHIBITED = ['ai_score', 'ai_classification'];\n\n// All 13 required fields must be defined\n// user_id: null is valid (contract allows null) — only undefined is rejected\nconst missing = REQUIRED.filter(f => e[f] === undefined);\nif (missing.length) {\n    msg.validationError = 'Missing required fields: ' + missing.join(', ');\n    return [null, msg];\n}\n\n// Prohibited fields must be absent — AI engine fills these downstream\nconst forbidden = PROHIBITED.filter(f => e[f] !== undefined);\nif (forbidden.length) {\n    msg.validationError = 'Prohibited fields present (AI engine fills them): ' + forbidden.join(', ');\n    return [null, msg];\n}\n\n// payload.kind must equal event_type (Pydantic discriminated union)\nif (!e.payload || e.payload.kind !== e.event_type) {\n    msg.validationError =\n        'payload.kind (' + (e.payload && e.payload.kind) + ')' +\n        ' != event_type (' + e.event_type + ')';\n    return [null, msg];\n}\n\n// correlated_events must be an array (may be empty)\nif (!Array.isArray(e.correlated_events)) {\n    msg.validationError = 'correlated_events must be an array, got: ' + typeof e.correlated_events;\n    return [null, msg];\n}\n\n// schema_version must be pinned to contract version\nif (e.schema_version !== '1.0.0') {\n    msg.validationError = 'schema_version must be \"1.0.0\", got: ' + e.schema_version;\n    return [null, msg];\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 670,
+        "y": 300,
+        "wires": [
+            [
+                "debugvalid200001",
+                "500fb64e9354f042"
+            ],
+            [
+                "debuginvalid20001"
+            ]
+        ],
+        "outputLabels": [
+            "valid — ready for Kafka",
+            "invalid — check validationError"
+        ]
+    },
+    {
+        "id": "debugvalid200001",
+        "type": "debug",
+        "z": "flow2tab00000001",
+        "name": "✓ UnifiedEvent ready",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 930,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "debuginvalid20001",
+        "type": "debug",
+        "z": "flow2tab00000001",
+        "name": "✗ Normalisation error (check msg.validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 980,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "3d8ab5a9d4be0504",
+        "type": "kafkajs-producer",
+        "z": "flow2tab00000001",
+        "name": "events.raw producer",
+        "client": "aae5efe671ec08ec",
+        "topic": "events.raw",
+        "advancedoptions": false,
+        "acknowledge": "all",
+        "partition": "",
+        "headeritems": {},
+        "key": "",
+        "responsetimeout": 30000,
+        "transactiontimeout": 60000,
+        "metadatamaxage": 300000,
+        "allowautotopiccreation": false,
+        "x": 1240,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "500fb64e9354f042",
+        "type": "json",
+        "z": "flow2tab00000001",
+        "name": "",
+        "property": "payload",
+        "action": "str",
+        "pretty": false,
+        "x": 910,
+        "y": 300,
+        "wires": [
+            [
+                "3d8ab5a9d4be0504"
+            ]
+        ]
+    },
+    {
+        "id": "aae5efe671ec08ec",
+        "type": "kafkajs-client",
+        "name": "Kafka middleware",
+        "brokers": "kafka:9092",
+        "clientid": "nodered-producer",
+        "connectiontimeout": 3000,
+        "requesttimeout": 25000,
+        "advancedretry": false,
+        "maxretrytime": 30000,
+        "initialretrytime": 300,
+        "factor": 0.2,
+        "multiplier": 2,
+        "retries": 5,
+        "auth": "none",
+        "tlsselfsign": false,
+        "tlscacert": "",
+        "tlsclientcert": "",
+        "tlsprivatekey": "",
+        "tlspassphrase": "",
+        "saslssl": true,
+        "saslmechanism": "plain",
+        "loglevel": "error"
+    },
+    {
+        "id": "d2c871e60d06362d",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-kafkajs": "0.0.7"
+        }
+    }
 ]
