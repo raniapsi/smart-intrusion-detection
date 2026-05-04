@@ -169,6 +169,22 @@ The server is now at `http://localhost:8000` with:
 - `/ws/events` — WebSocket live stream
 - `/docs` — auto-generated Swagger UI
 
+For live middleware integration, start the backend with the trained
+artefacts as well:
+
+```bash
+python3 -m backend.cli serve \
+    --topology dataset/topology/building_b1.yaml \
+    --data-dir scoring_service/output \
+    --baselines features/output/baselines.json \
+    --model models/trained/isoforest.joblib \
+    --port 8000
+```
+
+This enables `POST /api/ingest/events`, which accepts the middleware's
+normalised `UnifiedEvent`, scores it, stores the enriched event, creates
+an alert when needed, and broadcasts non-normal events to `/ws/events`.
+
 ### Step 7 — Start the dashboard
 
 In a separate terminal:

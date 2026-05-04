@@ -97,6 +97,16 @@ class Datastore:
         self._alerts.append(al)
         self._alerts_by_id[al.alert_id] = al
 
+    def add_event(self, ev: EnrichedEvent) -> None:
+        """Add one live enriched event to all query indices."""
+        with self._lock:
+            self._index_event(ev)
+
+    def add_alert(self, alert: Alert) -> None:
+        """Add one live alert to all query indices."""
+        with self._lock:
+            self._index_alert(alert)
+
     def finalise(self) -> None:
         """Sort all indices by timestamp once loading is complete."""
         self._events.sort(key=lambda e: e.timestamp)
@@ -158,11 +168,15 @@ class Datastore:
         return results
 
     def all_alerts(self) -> list[Alert]:
-        return self._alerts
+        return sorted(self._alerts, key=lambda a: a.created_at, reverse=True)
 
     def active_alerts(self) -> list[Alert]:
         """Non-acknowledged alerts."""
-        return [a for a in self._alerts if not a.acknowledged]
+        return sorted(
+            (a for a in self._alerts if not a.acknowledged),
+            key=lambda a: a.created_at,
+            reverse=True,
+        )
 
     def get_alert(self, alert_id: UUID) -> Optional[Alert]:
         return self._alerts_by_id.get(alert_id)
@@ -201,33 +215,14 @@ class Datastore:
         Per-zone "current threat level" gauge for the dashboard map.
 
         Definition:
-          score(zone) = max(score of active alerts in this zone,
-                            max ai_score of recent events in this zone)
+          score(zone) = max(score of active, non-acknowledged alerts)
 
-        The "active alerts" component is the dominant signal: as long as
-        an attack alert is open in a zone, the map keeps showing it.
-        Once the operator acknowledges the alerts, the score falls back
-        to the recent-events component, which trends to baseline as more
-        normal events arrive.
-
-        This matches what a SOC operator expects: the map highlights what
-        needs attention, not a moving average that "forgets" the attack.
+        Operator acknowledgement is the state transition that clears the
+        zone from the map. Historical enriched events stay queryable in
+        the logs, but they should not keep a zone critical after the SOC
+        operator has acknowledged the alert.
         """
-        # Recent-events component (lookback over the LAST N events seen
-        # in the zone — useful when there are no alerts but elevated
-        # scores, e.g. SUSPECT events).
-        N = 200
-        out: dict[str, float] = {}
-        for z in self._topo.zones:
-            recent = self._events_by_zone.get(z.zone_id, [])[-N:]
-            if not recent:
-                out[z.zone_id] = 0.0
-            else:
-                out[z.zone_id] = max(e.ai_score for e in recent)
-
-        # Active-alerts component — overrides the recent-events score
-        # whenever it is higher (which it almost always is for a real
-        # attack, since alerts come from CRITICAL/SUSPECT events).
+        out: dict[str, float] = {z.zone_id: 0.0 for z in self._topo.zones}
         for alert in self._alerts:
             if alert.acknowledged:
                 continue

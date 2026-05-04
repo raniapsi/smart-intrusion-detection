@@ -792,4 +792,47 @@ An estimated breakdown of development time by major technical area:
 
 ---
 
+## 16. AI Engine Integration
+
+The middleware can forward each received event to the AI engine in live
+mode. The local `/api/events` endpoint keeps the MVP event shape, then
+normalises it to the AI engine `UnifiedEvent` contract and sends it to:
+
+```text
+POST http://127.0.0.1:8000/api/ingest/events
+```
+
+Enable forwarding in `middleware/.env`:
+
+```env
+AI_ENGINE_URL=http://127.0.0.1:8000
+AI_FORWARD_ENABLED=true
+BUILDING_ID=B1
+```
+
+Start the AI backend with live scoring enabled:
+
+```bash
+cd ai-engine
+python3 -m backend.cli serve \
+    --topology dataset/topology/building_b1.yaml \
+    --data-dir scoring_service/output \
+    --baselines features/output/baselines.json \
+    --model models/trained/isoforest.joblib \
+    --port 8000
+```
+
+Then start the middleware on another port:
+
+```bash
+cd middleware
+uvicorn app.main:app --reload --port 8010
+```
+
+Posting to `http://127.0.0.1:8010/api/events` now stores the event in the
+middleware and forwards it to the AI engine for scoring. The SOC frontend
+continues to read from the AI backend (`:8000`) via REST and WebSocket.
+
+---
+
 *Document last updated on 25/04/2026 — Validated by the team.*

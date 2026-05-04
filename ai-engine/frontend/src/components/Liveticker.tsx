@@ -34,8 +34,11 @@ export function LiveTicker({ events, filterZone }: Props) {
           </div>
         ) : (
           <ul className="divide-y divide-border">
-            {filtered.slice(0, 50).map((e) => (
-              <li key={e.event_id} className="px-4 py-2 flex items-center gap-3">
+            {filtered.slice(0, 50).map((e, index) => (
+              <li
+                key={`${e.event_id}-${e.timestamp}-${index}`}
+                className="px-4 py-2 flex items-center gap-3"
+              >
                 <span className="text-[10px] font-mono text-gray-500 w-16 shrink-0">
                   {formatTime(e.timestamp)}
                 </span>

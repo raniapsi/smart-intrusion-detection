@@ -25,10 +25,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from dataset.topology import load_topology
+from scoring_service import ScoringPipeline
 
 from .datastore import Datastore
 from .replay import DEFAULT_SPEED_FACTOR, ReplayController
-from .routes import alerts, devices, events, logs, score, users, ws
+from .routes import alerts, devices, events, ingest, logs, score, users, ws
 from .ws_manager import WebSocketManager
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,8 @@ class BackendConfig:
     replay_speed_factor: float = DEFAULT_SPEED_FACTOR
     enable_replay: bool = True
     cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    baselines_path: Path | None = None
+    model_path: Path | None = None
 
 
 def _build_store(config: BackendConfig) -> Datastore:
@@ -87,6 +90,14 @@ def create_app(config: BackendConfig) -> FastAPI:
         app.state.store = store
         app.state.ws_manager = ws_manager
         app.state.replay = replay
+        app.state.pipeline = None
+
+        if config.baselines_path is not None and config.model_path is not None:
+            app.state.pipeline = ScoringPipeline.from_paths(
+                topology_path=config.topology_path,
+                baselines_path=config.baselines_path,
+                model_path=config.model_path,
+            )
 
         if config.enable_replay:
             replay.start()
@@ -116,6 +127,7 @@ def create_app(config: BackendConfig) -> FastAPI:
     app.include_router(users.router)
     app.include_router(devices.router)
     app.include_router(score.router)
+    app.include_router(ingest.router)
     app.include_router(logs.router)
     app.include_router(ws.router)
 
@@ -129,6 +141,7 @@ def create_app(config: BackendConfig) -> FastAPI:
                 "/api/alert/{id}/acknowledge",
                 "/api/users", "/api/users/{user_id}/profile",
                 "/api/devices", "/api/score/current", "/api/logs",
+                "/api/ingest/events",
                 "/ws/events",
             ],
         }

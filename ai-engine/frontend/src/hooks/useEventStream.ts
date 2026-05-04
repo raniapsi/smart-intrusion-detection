@@ -50,7 +50,16 @@ export function useEventStream(): LiveStreamState {
           if (msg.type === 'hello') {
             setHello(msg)
           } else if (msg.type === 'event') {
-            setEvents((prev) => [msg, ...prev].slice(0, MAX_BUFFER))
+            // Drop exact duplicate frames, but keep historical entries if the
+            // same source event_id is resent later with a different timestamp.
+            setEvents((prev) => [
+              msg,
+              ...prev.filter(
+                (event) =>
+                  event.event_id !== msg.event_id ||
+                  event.timestamp !== msg.timestamp,
+              ),
+            ].slice(0, MAX_BUFFER))
           }
         } catch {
           // ignore malformed frames

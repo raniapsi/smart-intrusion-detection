@@ -19,10 +19,9 @@ Why a sigmoid and not just min-max?
   the IF output directly comparable with the rules engine output.
 
 NaN handling:
-  scikit-learn's IsolationForest tolerates NaN since 1.4. We pass
-  features through unchanged. For columns where NaN means "not
-  applicable" (e.g. bytes_out for non-network events), the IF treats
-  them as a separate signal — which is what we want.
+  Some scikit-learn versions reject NaN for IsolationForest. For columns
+  where NaN means "not applicable" (e.g. bytes_out for non-network
+  events), we encode it as 0.0 before handing the matrix to sklearn.
 """
 
 from __future__ import annotations
@@ -84,7 +83,8 @@ class TrainedIsolationForest:
         if missing:
             raise KeyError(f"Missing feature columns: {missing}")
 
-        X = df[self.feature_columns].to_numpy(dtype=np.float32, copy=False)
+        X = df[self.feature_columns].to_numpy(dtype=np.float32, copy=True)
+        X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
         decisions = self.model.decision_function(X)
         return _decision_to_score(
             decisions,
@@ -163,7 +163,8 @@ def train_isolation_forest(
     if missing:
         raise KeyError(f"Missing feature columns for training: {missing}")
 
-    X = df[feature_columns].to_numpy(dtype=np.float32, copy=False)
+    X = df[feature_columns].to_numpy(dtype=np.float32, copy=True)
+    X = np.nan_to_num(X, nan=0.0, posinf=0.0, neginf=0.0)
     n = X.shape[0]
     if n < 100:
         raise ValueError(

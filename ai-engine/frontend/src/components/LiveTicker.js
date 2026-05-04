@@ -1,0 +1,9 @@
+import { jsxs as _jsxs, jsx as _jsx } from "react/jsx-runtime";
+import { ClassificationBadge } from './ClassificationBadge';
+import { formatTime } from '../lib/format';
+export function LiveTicker({ events, filterZone }) {
+    const filtered = filterZone
+        ? events.filter((e) => e.zone_id === filterZone)
+        : events;
+    return (_jsxs("div", { className: "bg-panel border border-border rounded-lg flex flex-col h-full", children: [_jsxs("div", { className: "px-4 py-3 border-b border-border flex items-center justify-between", children: [_jsxs("h2", { className: "text-sm font-semibold uppercase tracking-wider text-gray-300", children: ["Live event stream", ' ', filterZone && (_jsxs("span", { className: "text-suspect normal-case font-mono text-xs", children: ["\u00B7 zone ", filterZone] }))] }), _jsxs("span", { className: "text-xs font-mono text-gray-500", children: [filtered.length, " recent"] })] }), _jsx("div", { className: "flex-1 overflow-y-auto", children: filtered.length === 0 ? (_jsx("div", { className: "p-4 text-sm text-gray-500 font-mono", children: "Waiting for live events\u2026" })) : (_jsx("ul", { className: "divide-y divide-border", children: filtered.slice(0, 50).map((e, index) => (_jsxs("li", { className: "px-4 py-2 flex items-center gap-3", children: [_jsx("span", { className: "text-[10px] font-mono text-gray-500 w-16 shrink-0", children: formatTime(e.timestamp) }), _jsx(ClassificationBadge, { classification: e.ai_classification, score: e.ai_score, size: "sm" }), _jsx("span", { className: "text-xs font-mono text-gray-400 w-12 shrink-0", children: e.zone_id }), _jsxs("span", { className: "text-xs text-gray-200 truncate", children: [e.event_type, e.user_id && (_jsxs("span", { className: "text-gray-500", children: [" \u00B7 ", e.user_id] }))] })] }, `${e.event_id}-${e.timestamp}-${index}`))) })) })] }));
+}

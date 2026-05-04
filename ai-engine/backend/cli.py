@@ -64,6 +64,20 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
 
+    baselines_path = Path(args.baselines) if args.baselines else None
+    model_path = Path(args.model) if args.model else None
+    if (baselines_path is None) != (model_path is None):
+        print(
+            "error: --baselines and --model must be provided together "
+            "for live ingestion",
+            file=sys.stderr,
+        )
+        return 2
+    for label, path in (("baselines", baselines_path), ("model", model_path)):
+        if path is not None and not path.is_file():
+            print(f"error: {label} not found: {path}", file=sys.stderr)
+            return 2
+
     config = BackendConfig(
         topology_path=topo_path,
         enriched_paths=enriched,
@@ -71,6 +85,8 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         replay_speed_factor=args.speed,
         enable_replay=not args.no_replay,
         cors_origins=args.cors_origins or ["*"],
+        baselines_path=baselines_path,
+        model_path=model_path,
     )
 
     logging.basicConfig(
@@ -122,6 +138,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--cors-origins", action="append",
         help="Allowed CORS origin (repeatable). Defaults to '*'.",
+    )
+    p.add_argument(
+        "--baselines",
+        help="Baselines JSON path; required with --model for live ingestion",
+    )
+    p.add_argument(
+        "--model",
+        help="Trained Isolation Forest joblib path; required with --baselines",
     )
     p.set_defaults(func=_cmd_serve)
 

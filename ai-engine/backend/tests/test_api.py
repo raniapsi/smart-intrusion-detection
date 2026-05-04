@@ -110,6 +110,7 @@ class TestRoot:
         body = r.json()
         assert body["service"] == "soc-backend"
         assert "/api/events" in body["endpoints"]
+        assert "/api/ingest/events" in body["endpoints"]
 
 
 # =============================================================================
@@ -149,6 +150,28 @@ class TestEvents:
         # 10001 should be rejected by Query(le=10000).
         r = client.get("/api/events?limit=10001")
         assert r.status_code == 422
+
+    def test_live_ingest_requires_pipeline(self, client):
+        r = client.post("/api/ingest/events", json={
+            "event_id": "00000000-0000-4000-8000-000000000001",
+            "schema_version": "1.0.0",
+            "event_type": "MOTION_DETECTED",
+            "source_layer": "PHYSICAL",
+            "timestamp": "2026-04-01T08:00:00+00:00",
+            "ingestion_timestamp": "2026-04-01T08:00:00+00:00",
+            "building_id": "B1",
+            "zone_id": "Z1",
+            "device_id": "M-Z1-01",
+            "user_id": None,
+            "severity_raw": "INFO",
+            "payload": {
+                "kind": "MOTION_DETECTED",
+                "detector_device_id": "M-Z1-01",
+                "entity_count": 1,
+            },
+            "correlated_events": [],
+        })
+        assert r.status_code == 503
 
 
 # =============================================================================
