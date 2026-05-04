@@ -13,8 +13,8 @@ The Security & PQC scope covers **4 major functional blocks**:
 |-------|-------------|
 | **Double Proxy** | Forward Proxy (Gateway side) + Reverse Proxy (Middleware side) with PQC termination |
 | **TLS 1.3 Hybrid Handshake** | X25519MLKEM768 key exchange + Session Resumption PSK+DHE |
-| **Certificates & mTLS** | Hybrid CA, ECC-hybrid-MLDSA5 certificate generation, mTLS allowlist |
-| **Log Signing** | PQC log signing with ECC-hybrid-MLDSA5 + secure key storage |
+| **Certificates & mTLS** | Hybrid CA, p384_mldsa65 certificate generation, mTLS allowlist |
+| **Log Signing** | PQC log signing with p384_mldsa65 + secure key storage |
 
 The split separates **transport** (encrypted tunnel) from **identity** (certificates, authentication, signing).
 
@@ -71,19 +71,19 @@ Responsible for the **cryptographic chain of trust**: hybrid certificate generat
 
 | # | Mission | Detail |
 |---|---------|--------|
-| 1 | **Hybrid CA (PKI-free)** | Generation of the root certificate and hybrid private key ECC-hybrid-MLDSA5 using `liboqs` + `oqs-python`. No external PKI: allow-list model. |
-| 2 | **Gateway & Middleware Certificates** | Generation of identity certificates for the Gateway and the Middleware, signed by the hybrid CA. ECC-hybrid-MLDSA5 private keys. |
+| 1 | **Hybrid CA (PKI-free)** | Generation of the root certificate and hybrid private key p384_mldsa65 using `liboqs` + `oqs-python`. No external PKI: allow-list model. |
+| 2 | **Gateway & Middleware Certificates** | Generation of identity certificates for the Gateway and the Middleware, signed by the hybrid CA. p384_mldsa65 private keys. |
 | 3 | **mTLS Allowlist** | Implementation of the mutual authentication mechanism without PKI: `allowlist.json` file listing authorised certificates. Cross-validation Gateway ↔ Middleware. |
 | 4 | **Secure Key Storage** | Encryption of `.pem` files with AES-256 + passphrase. Permissions 600. Provisioning script on first startup. |
-| 5 | **PQC Log Signing** | Implementation of `log_signer.py`: ECC-hybrid-MLDSA5 double signature (ECDSA P-384 ∥ ML-DSA-5) of each log entry. Integrity verification. |
-| 6 | **Device Signature Scheme Choice** | Technical decision: ECC-hybrid-MLDSA5 (consistent with logs, heavier) vs. ML-DSA-65 (lighter) for device certificates. Documented justification. |
+| 5 | **PQC Log Signing** | Implementation of `log_signer.py`: p384_mldsa65 double signature (ECDSA P-384 ∥ ML-DSA-65) of each log entry. Integrity verification. |
+| 6 | **Device Signature Scheme Choice** | Technical decision: p384_mldsa65 (consistent with logs, heavier) vs. ML-DSA-65 (lighter) for device certificates. Documented justification. |
 
 ### Files Under Responsibility
 
 ```
 security/
 ├── ca/
-│   ├── ca.crt                ← Root certificate (ECC-hybrid-MLDSA5)
+│   ├── ca.crt                ← Root certificate (p384_mldsa65)
 │   └── ca.key                ← Root private key (AES-256 encrypted)
 ├── gateway/
 │   ├── gateway.crt           ← Gateway identity certificate
@@ -92,18 +92,18 @@ security/
 │   ├── middleware.crt        ← Middleware identity certificate
 │   └── middleware.key        ← Hybrid private key
 ├── allowlist.json            ← List of authorised certificates (mTLS)
-├── log_signer.py             ← ECC-hybrid-MLDSA5 log signing
+├── log_signer.py             ← p384_mldsa65 log signing
 └── gen_certs.py              ← [NEW] Certificate generation script
 ```
 
 ### Deliverables
 
-- [ ] Working hybrid CA (root certificate + ECC-hybrid-MLDSA5 key)
+- [ ] Working hybrid CA (root certificate + p384_mldsa65 key)
 - [ ] Gateway and Middleware certificates generated and signed by the CA
 - [ ] mTLS allowlist operational (mutual authentication validated)
 - [ ] `.pem` keys encrypted with AES-256 + automatic provisioning
 - [ ] `log_signer.py`: log signing + verification working
-- [ ] Technical note on ML-DSA-5 vs. ML-DSA-65 choice for devices
+- [ ] Technical note on ML-DSA-65 vs. ML-DSA-65 choice for devices
 
 ---
 
@@ -114,7 +114,7 @@ security/
 | **Scope** | Transport & Tunnel | Identity & Integrity |
 | **Workload** | 15% | 15% |
 | **Main Technologies** | Nginx, OQS-provider, Docker Networks | liboqs, oqs-python, OpenSSL |
-| **Primary Algorithm** | X25519MLKEM768 (KEM) | ECC-hybrid-MLDSA5 (Signature) |
+| **Primary Algorithm** | X25519MLKEM768 (KEM) | p384_mldsa65 (Signature) |
 | **Focus** | Tunnel performance, latency | Chain of trust, non-repudiation |
 | **Deliverables** | 6 | 6 |
 

@@ -1,0 +1,8 @@
+# Clés privées
+*.key
+
+# Backups locaux
+backup_*/
+
+# Clés de signature des logs (générées localement)
+log_signing_keys/
