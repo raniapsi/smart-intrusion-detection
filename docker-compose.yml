@@ -1,0 +1,95 @@
+services:
+  ai-backend:
+    build:
+      context: ./ai-engine
+    container_name: smart-ai-backend
+    ports:
+      - "8000:8000"
+    command:
+      - python
+      - -m
+      - backend.cli
+      - serve
+      - --topology
+      - dataset/topology/building_b1.yaml
+      - --baselines
+      - features/output/baselines.json
+      - --model
+      - models/trained/isoforest.joblib
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --no-replay
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/score/current', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
+  middleware:
+    build:
+      context: ./middleware
+    container_name: smart-middleware
+    ports:
+      - "8010:8010"
+    environment:
+      APP_NAME: smart-intrusion-detection
+      APP_ENV: development
+      DEBUG: "true"
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: "8010"
+      AI_ENGINE_URL: http://ai-backend:8000
+      AI_FORWARD_ENABLED: "true"
+      BUILDING_ID: B1
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: "1883"
+      DATABASE_URL: postgresql://user:password@timescaledb:5432/intrusion_db
+      RISK_THRESHOLD_SUSPECT: "50"
+      RISK_THRESHOLD_CRITICAL: "80"
+    depends_on:
+      ai-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/api/health', timeout=5)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./ai-engine/frontend
+    container_name: smart-dashboard
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_PROXY_TARGET: http://ai-backend:8000
+      VITE_WS_PROXY_TARGET: ws://ai-backend:8000
+    depends_on:
+      ai-backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  alert-sender:
+    build:
+      context: ./middleware
+    container_name: smart-alert-sender
+    profiles:
+      - alerts
+    command:
+      - python
+      - scripts/auto_alerts.py
+      - --url
+      - http://middleware:8010/api/events
+      - --interval
+      - ${ALERT_INTERVAL:-5}
+      - --jitter
+      - ${ALERT_JITTER:-1}
+    depends_on:
+      middleware:
+        condition: service_healthy
+    restart: unless-stopped
