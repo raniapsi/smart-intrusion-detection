@@ -833,6 +833,29 @@ Posting to `http://127.0.0.1:8010/api/events` now stores the event in the
 middleware and forwards it to the AI engine for scoring. The SOC frontend
 continues to read from the AI backend (`:8000`) via REST and WebSocket.
 
+To automate live alerts, run:
+
+```bash
+cd middleware
+python3 scripts/auto_alerts.py --interval 5
+```
+
+Useful options:
+
+```bash
+# Send 20 random alerts, one every 3 seconds
+python3 scripts/auto_alerts.py --interval 3 --count 20
+
+# Only send forced-door and network anomalies
+python3 scripts/auto_alerts.py \
+    --interval 4 \
+    --scenario forced_door \
+    --scenario network_port_scan
+
+# Add random timing variation around the interval
+python3 scripts/auto_alerts.py --interval 5 --jitter 2
+```
+
 ---
 
 *Document last updated on 25/04/2026 — Validated by the team.*
