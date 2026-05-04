@@ -1,0 +1,1002 @@
+[
+    {
+        "id": "flow1tab00000001",
+        "type": "tab",
+        "label": "Flow 1 — MQTT Ingestion",
+        "disabled": false,
+        "info": "Subscribes to building/# on Mosquitto (WebSocket ws://mosquitto:9001).\nExtracts sensor type from topic → routes to per-type parser.\nEach parser validates required fields per NODERED_CONTRACT.md §5.\nOutput 1 of each parser = valid msg (→ Flow 2).\nOutput 2 of each parser = invalid msg (→ debug error)."
+    },
+    {
+        "id": "flow2tab00000001",
+        "type": "tab",
+        "label": "Flow 2 — Normalisation",
+        "disabled": false,
+        "info": "Receives validated raw events from Flow 1 via link in.\nProduces a UnifiedEvent conforming to NODERED_CONTRACT.md:\n  - 13 required fields present\n  - ai_score / ai_classification MUST NOT be set (Pydantic extra=forbid)\n  - payload.kind == event_type (discriminated union)\n  - schema_version: 1.0.0\n\nTo wire up: in Flow 1, add a 'link out' after each parser output 1 (valid),\npoint them all to the link in node id: linkin200000001"
+    },
+    {
+        "id": "flow5tab00000001",
+        "type": "tab",
+        "label": "Flow 5 — Device Health",
+        "disabled": false,
+        "info": "IoT device health monitoring — Architecture.md §5.2 Flow 5.\n\nPath A (heartbeat tracker):\n  link in ← same link out as Flow 2 (all valid events from Flow 1)\n  → Update last seen  [stores flow.lastSeen[deviceId] = Date.now()]\n\nPath B (periodic check):\n  inject every 30s → Check device health\n    → debug ⚠ Device OFFLINE\n    → mqtt out → building/B1/device/alert\n\nOffline threshold: 120 000 ms (2 minutes).\nPayload format: NODERED_CONTRACT.md §5.7 DEVICE_STATUS."
+    },
+    {
+        "id": "fa340bc84e96754e",
+        "type": "mqtt-broker",
+        "name": "",
+        "broker": "ws://mosquitto",
+        "port": "9001",
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "mqttbroker000001",
+        "type": "mqtt-broker",
+        "name": "Mosquitto WS (middleware-net)",
+        "broker": "ws://mosquitto",
+        "port": "9001",
+        "clientid": "nodered-flow1-ingestion",
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "aae5efe671ec08ec",
+        "type": "kafkajs-client",
+        "name": "Kafka middleware",
+        "brokers": "kafka:9092",
+        "clientid": "nodered-producer",
+        "connectiontimeout": 3000,
+        "requesttimeout": 25000,
+        "advancedretry": false,
+        "maxretrytime": 30000,
+        "initialretrytime": 300,
+        "factor": 0.2,
+        "multiplier": 2,
+        "retries": 5,
+        "auth": "none",
+        "tlsselfsign": false,
+        "tlscacert": "",
+        "tlsclientcert": "",
+        "tlsprivatekey": "",
+        "tlspassphrase": "",
+        "saslssl": true,
+        "saslmechanism": "plain",
+        "loglevel": "error"
+    },
+    {
+        "id": "comment000000001",
+        "type": "comment",
+        "z": "flow1tab00000001",
+        "name": "Flow 1 — MQTT Multi-source Ingestion\nbroker: ws://mosquitto:9001 | topic: building/# | QoS 1 | MQTT 3.1.1\nContract: NODERED_CONTRACT.md §5",
+        "info": "",
+        "x": 240,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "mqttin000000001",
+        "type": "mqtt in",
+        "z": "flow1tab00000001",
+        "name": "building/# — all sensors",
+        "topic": "building/#",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "fa340bc84e96754e",
+        "nl": false,
+        "rap": false,
+        "rh": 0,
+        "inputs": 0,
+        "x": 170,
+        "y": 300,
+        "wires": [
+            [
+                "extracttype00001"
+            ]
+        ]
+    },
+    {
+        "id": "extracttype00001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Extract Sensor Type",
+        "func": "// Topic formats:\n//   building/{bId}/zone/{zId}/{type}/{devId}  → type in parts[4]\n//   building/{bId}/network/{subtype}           → type = 'network'\n\nconst parts = msg.topic.split('/');\n\n// Defensive JSON parse if payload arrived as string\nif (typeof msg.payload === 'string') {\n    try {\n        msg.payload = JSON.parse(msg.payload);\n    } catch (e) {\n        node.error('Invalid JSON payload on topic: ' + msg.topic, msg);\n        return null;\n    }\n}\n\nif (parts.length >= 4 && parts[2] === 'network') {\n    msg.sensorType    = 'network';\n    msg.networkSubtype = parts[3];   // 'flow' or 'alert'\n    msg.buildingId    = parts[1];\n    msg.zoneId        = null;\n    msg.deviceId      = parts[3];\n} else if (parts.length >= 6) {\n    msg.sensorType = parts[4];       // badge | door | motion | camera\n    msg.buildingId = parts[1];\n    msg.zoneId     = parts[3];\n    msg.deviceId   = parts[5];\n} else {\n    node.warn('Unrecognised topic structure: ' + msg.topic);\n    return null;\n}\n\nreturn msg;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 420,
+        "y": 300,
+        "wires": [
+            [
+                "switch00000001"
+            ]
+        ]
+    },
+    {
+        "id": "switch00000001",
+        "type": "switch",
+        "z": "flow1tab00000001",
+        "name": "Route by sensorType",
+        "property": "sensorType",
+        "propertyType": "msg",
+        "rules": [
+            {
+                "t": "eq",
+                "v": "badge",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "door",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "motion",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "camera",
+                "vt": "str"
+            },
+            {
+                "t": "eq",
+                "v": "network",
+                "vt": "str"
+            }
+        ],
+        "checkall": "false",
+        "repair": false,
+        "outputs": 5,
+        "x": 660,
+        "y": 300,
+        "wires": [
+            [
+                "parsesbadge0001"
+            ],
+            [
+                "parsedoor000001"
+            ],
+            [
+                "parsemotion0001"
+            ],
+            [
+                "parsecamera0001"
+            ],
+            [
+                "parsenetwork0001"
+            ]
+        ]
+    },
+    {
+        "id": "parsesbadge0001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Parse Badge",
+        "func": "// BADGE_ACCESS — NODERED_CONTRACT.md §5.1\n// Required: badge_id, access_result\n// access_result ∈ {GRANTED, DENIED, TIMEOUT}\nconst p = msg.payload;\nconst VALID_RESULTS = ['GRANTED', 'DENIED', 'TIMEOUT'];\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nconst missing = ['badge_id', 'access_result'].filter(f => p[f] == null);\nif (missing.length) {\n    msg.validationError = 'Missing required fields: ' + missing.join(', ');\n    return [null, msg];\n}\nif (!VALID_RESULTS.includes(p.access_result)) {\n    msg.validationError = 'Invalid access_result: ' + p.access_result +\n        ' — expected one of ' + VALID_RESULTS.join('|');\n    return [null, msg];\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 910,
+        "y": 100,
+        "wires": [
+            [
+                "debugbadgeok0001",
+                "67bea9173062bc60"
+            ],
+            [
+                "debugbadgeerr001"
+            ]
+        ],
+        "outputLabels": [
+            "valid",
+            "invalid"
+        ]
+    },
+    {
+        "id": "debugbadgeok0001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✓ badge — valid",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1130,
+        "y": 60,
+        "wires": []
+    },
+    {
+        "id": "debugbadgeerr001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✗ badge — INVALID (check validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1170,
+        "y": 140,
+        "wires": []
+    },
+    {
+        "id": "parsedoor000001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Parse Door",
+        "func": "// DOOR_OPENED / DOOR_CLOSED / DOOR_FORCED — NODERED_CONTRACT.md §5.2\n// Required: door_id\n// Optional: duration_open_seconds (number if present)\nconst p = msg.payload;\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nif (!p.door_id) {\n    msg.validationError = 'Missing required field: door_id';\n    return [null, msg];\n}\nif (p.duration_open_seconds !== undefined && p.duration_open_seconds !== null) {\n    if (typeof p.duration_open_seconds !== 'number') {\n        msg.validationError = 'duration_open_seconds must be a number, got: ' +\n            typeof p.duration_open_seconds;\n        return [null, msg];\n    }\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 200,
+        "wires": [
+            [
+                "debugdoorok00001",
+                "67bea9173062bc60"
+            ],
+            [
+                "debugdoorerr0001"
+            ]
+        ],
+        "outputLabels": [
+            "valid",
+            "invalid"
+        ]
+    },
+    {
+        "id": "debugdoorok00001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✓ door — valid",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1120,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "debugdoorerr0001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✗ door — INVALID (check validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1165,
+        "y": 260,
+        "wires": []
+    },
+    {
+        "id": "parsemotion0001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Parse Motion",
+        "func": "// MOTION_DETECTED — NODERED_CONTRACT.md §5.3\n// Required: detector_device_id\n// Optional: entity_count (integer >= 1 if present)\nconst p = msg.payload;\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nif (!p.detector_device_id) {\n    msg.validationError = 'Missing required field: detector_device_id';\n    return [null, msg];\n}\nif (p.entity_count !== undefined && p.entity_count !== null) {\n    if (!Number.isInteger(p.entity_count) || p.entity_count < 1) {\n        msg.validationError = 'entity_count must be an integer >= 1, got: ' + p.entity_count;\n        return [null, msg];\n    }\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 320,
+        "wires": [
+            [
+                "debugmotionok0001",
+                "67bea9173062bc60"
+            ],
+            [
+                "debugmotionerr001"
+            ]
+        ],
+        "outputLabels": [
+            "valid",
+            "invalid"
+        ]
+    },
+    {
+        "id": "debugmotionok0001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✓ motion — valid",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1130,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "debugmotionerr001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✗ motion — INVALID (check validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1170,
+        "y": 380,
+        "wires": []
+    },
+    {
+        "id": "parsecamera0001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Parse Camera",
+        "func": "// CAMERA_EVENT — NODERED_CONTRACT.md §5.6\n// Required: camera_device_id, event_subtype\n// Optional: snapshot_url\nconst p = msg.payload;\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\nconst missing = ['camera_device_id', 'event_subtype'].filter(f => !p[f]);\nif (missing.length) {\n    msg.validationError = 'Missing required fields: ' + missing.join(', ');\n    return [null, msg];\n}\n// snapshot_url is optional (string or null)\nif (p.snapshot_url !== undefined && p.snapshot_url !== null &&\n    typeof p.snapshot_url !== 'string') {\n    msg.validationError = 'snapshot_url must be a string or null';\n    return [null, msg];\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 440,
+        "wires": [
+            [
+                "debugcameraok0001",
+                "67bea9173062bc60"
+            ],
+            [
+                "debugcameraerr001"
+            ]
+        ],
+        "outputLabels": [
+            "valid",
+            "invalid"
+        ]
+    },
+    {
+        "id": "debugcameraok0001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✓ camera — valid",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1130,
+        "y": 420,
+        "wires": []
+    },
+    {
+        "id": "debugcameraerr001",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✗ camera — INVALID (check validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1165,
+        "y": 500,
+        "wires": []
+    },
+    {
+        "id": "parsenetwork0001",
+        "type": "function",
+        "z": "flow1tab00000001",
+        "name": "Parse Network",
+        "func": "// NETWORK_FLOW (§5.4) or NETWORK_ANOMALY (§5.5)\n// Dispatched via msg.networkSubtype set by Extract Sensor Type:\n//   topic building/B1/network/flow  → subtype = 'flow'\n//   topic building/B1/network/alert → subtype = 'alert'\nconst p = msg.payload;\nconst subtype = msg.networkSubtype || '';\n\nif (!p || typeof p !== 'object') {\n    msg.validationError = 'payload is not an object';\n    return [null, msg];\n}\n\nif (subtype === 'flow') {\n    // NETWORK_FLOW required fields\n    const PROTOCOLS = ['TCP', 'UDP', 'ICMP'];\n    const required  = ['src_ip', 'dst_ip', 'protocol', 'bytes_sent', 'bytes_received'];\n    const missing   = required.filter(f => p[f] == null);\n    if (missing.length) {\n        msg.validationError = 'Missing required fields: ' + missing.join(', ');\n        return [null, msg];\n    }\n    if (!PROTOCOLS.includes(p.protocol)) {\n        msg.validationError = 'Invalid protocol: ' + p.protocol +\n            ' — expected one of ' + PROTOCOLS.join('|');\n        return [null, msg];\n    }\n    if (!Number.isInteger(p.bytes_sent) || p.bytes_sent < 0) {\n        msg.validationError = 'bytes_sent must be integer >= 0';\n        return [null, msg];\n    }\n    if (!Number.isInteger(p.bytes_received) || p.bytes_received < 0) {\n        msg.validationError = 'bytes_received must be integer >= 0';\n        return [null, msg];\n    }\n\n} else if (subtype === 'alert') {\n    // NETWORK_ANOMALY required fields\n    const LABELS = ['PORT_SCAN','EXFILTRATION','C2_BEACON','LATERAL_MOVEMENT','DOS','UNKNOWN'];\n    if (!p.label) {\n        msg.validationError = 'Missing required field: label';\n        return [null, msg];\n    }\n    if (!LABELS.includes(p.label)) {\n        msg.validationError = 'Invalid label: ' + p.label +\n            ' — expected one of ' + LABELS.join('|');\n        return [null, msg];\n    }\n    if (!p.evidence) {\n        msg.validationError = 'Missing required field: evidence';\n        return [null, msg];\n    }\n\n} else {\n    msg.validationError = 'Unknown network subtype: \"' + subtype +\n        '\" — expected \"flow\" or \"alert\"';\n    return [null, msg];\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 900,
+        "y": 560,
+        "wires": [
+            [
+                "debugnetworkvalid1",
+                "67bea9173062bc60"
+            ],
+            [
+                "debugnetworkerr01"
+            ]
+        ],
+        "outputLabels": [
+            "valid",
+            "invalid"
+        ]
+    },
+    {
+        "id": "debugnetworkvalid1",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✓ network — valid",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1130,
+        "y": 540,
+        "wires": []
+    },
+    {
+        "id": "debugnetworkerr01",
+        "type": "debug",
+        "z": "flow1tab00000001",
+        "name": "✗ network — INVALID (check validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 1165,
+        "y": 620,
+        "wires": []
+    },
+    {
+        "id": "67bea9173062bc60",
+        "type": "link out",
+        "z": "flow1tab00000001",
+        "name": "To Flow 2",
+        "mode": "link",
+        "links": [
+            "linkin200000001",
+            "linkin500000001"
+        ],
+        "x": 1465,
+        "y": 340,
+        "wires": []
+    },
+    {
+        "id": "6c28ec586ef4e02b",
+        "type": "inject",
+        "z": "flow1tab00000001",
+        "name": "Badge",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "building/B1/zone/Z3/badge/R-Z3-01",
+        "payload": "{\"badge_id\":\"b042\",\"user_id\":\"u042\",\"access_result\":\"GRANTED\",\"reader_device_id\":\"R-Z3-01\",\"timestamp\":\"2026-05-03T09:02:14.512Z\"}",
+        "payloadType": "json",
+        "x": 170,
+        "y": 440,
+        "wires": [
+            [
+                "extracttype00001"
+            ]
+        ]
+    },
+    {
+        "id": "9aafa73c90dc776b",
+        "type": "inject",
+        "z": "flow1tab00000001",
+        "name": "Door Forced",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "building/B1/zone/Z2/door/D-Z2-01",
+        "payload": "{\"door_id\":\"D-Z2-01\",\"state\":\"FORCED\",\"duration_open_seconds\":12.4,\"timestamp\":\"2026-05-03T10:15:00Z\"}",
+        "payloadType": "json",
+        "x": 190,
+        "y": 480,
+        "wires": [
+            [
+                "extracttype00001"
+            ]
+        ]
+    },
+    {
+        "id": "d7adc5dd45b1821a",
+        "type": "inject",
+        "z": "flow1tab00000001",
+        "name": "Motion Detected",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "building/B1/zone/Z5/motion/M-Z5-01",
+        "payload": "{\"detector_device_id\":\"M-Z5-01\",\"entity_count\":2,\"timestamp\":\"2026-05-03T10:20:00Z\"}",
+        "payloadType": "json",
+        "x": 200,
+        "y": 520,
+        "wires": [
+            [
+                "extracttype00001"
+            ]
+        ]
+    },
+    {
+        "id": "b4f917c5942a2d5e",
+        "type": "inject",
+        "z": "flow1tab00000001",
+        "name": "Network Anomaly",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "building/B1/network/alert",
+        "payload": "{\"label\":\"PORT_SCAN\",\"evidence\":\"syn_burst_to_50_ports_in_5s\",\"timestamp\":\"2026-05-03T10:25:00Z\"}",
+        "payloadType": "json",
+        "x": 200,
+        "y": 580,
+        "wires": [
+            [
+                "extracttype00001"
+            ]
+        ]
+    },
+    {
+        "id": "097e384af0719c0c",
+        "type": "inject",
+        "z": "flow1tab00000001",
+        "name": "Network Flow ",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "building/B1/network/flow",
+        "payload": "{\"src_ip\":\"10.42.8.13\",\"dst_ip\":\"10.42.0.5\",\"dst_port\":443,\"protocol\":\"TCP\",\"bytes_sent\":12480,\"bytes_received\":1024,\"duration_seconds\":1.2,\"timestamp\":\"2026-05-03T10:30:00Z\"}",
+        "payloadType": "json",
+        "x": 190,
+        "y": 640,
+        "wires": [
+            [
+                "extracttype00001"
+            ]
+        ]
+    },
+    {
+        "id": "08f75936d12acad9",
+        "type": "inject",
+        "z": "flow1tab00000001",
+        "name": "Camera",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.1,
+        "topic": "building/B1/zone/Z8/camera/CAM-Z8-01",
+        "payload": "{\"camera_device_id\":\"CAM-Z8-01\",\"event_subtype\":\"MOTION_DETECTED\",\"snapshot_url\":null,\"timestamp\":\"2026-05-03T10:35:00Z\"}",
+        "payloadType": "json",
+        "x": 170,
+        "y": 700,
+        "wires": [
+            [
+                "extracttype00001"
+            ]
+        ]
+    },
+    {
+        "id": "comment2000000001",
+        "type": "comment",
+        "z": "flow2tab00000001",
+        "name": "Flow 2 — Normalisation & Enrichment\nInput: validated raw events from Flow 1 (via link in)\nOutput: UnifiedEvent ready for Kafka events.raw\nContract: NODERED_CONTRACT.md — 13 fields, extra=forbid",
+        "info": "",
+        "x": 260,
+        "y": 120,
+        "wires": []
+    },
+    {
+        "id": "comment2000000002",
+        "type": "comment",
+        "z": "flow2tab00000001",
+        "name": "HOW TO CONNECT FLOW 1:\nAdd a 'link out' node after each parser valid output in Flow 1.\nSet each link out target to this link in node (id: linkin200000001).",
+        "info": "",
+        "x": 240,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "linkin200000001",
+        "type": "link in",
+        "z": "flow2tab00000001",
+        "name": "From Flow 1 — validated events",
+        "links": [
+            "67bea9173062bc60"
+        ],
+        "x": 135,
+        "y": 300,
+        "wires": [
+            [
+                "normalize200001"
+            ]
+        ]
+    },
+    {
+        "id": "normalize200001",
+        "type": "function",
+        "z": "flow2tab00000001",
+        "name": "Normalize to UnifiedEvent",
+        "func": "// Flow 1 sets on msg: sensorType, networkSubtype, buildingId, zoneId, deviceId\n// msg.payload = validated raw sensor payload\n// crypto.randomUUID not available in Node-RED function sandbox\n   // Use simple UUID v4 generator instead\n   function uuidv4() {\n       return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {\n           var r = Math.random() * 16 | 0;\n           var v = c === 'x' ? r : (r & 0x3 | 0x8);\n           return v.toString(16);\n       });\n   }\nconst p          = msg.payload;\nconst sensorType = msg.sensorType     || '';\nconst netSubtype = msg.networkSubtype || '';\nconst buildingId = msg.buildingId     || 'B1';\nconst zoneId     = msg.zoneId         || 'GLOBAL'; // network events carry no zone in topic\nconst deviceId   = msg.deviceId       || 'UNKNOWN';\n\n// ── 1. event_type ────────────────────────────────────────────────────\nlet eventType;\nswitch (sensorType) {\n    case 'badge':   eventType = 'BADGE_ACCESS';   break;\n    case 'motion':  eventType = 'MOTION_DETECTED'; break;\n    case 'camera':  eventType = 'CAMERA_EVENT';    break;\n    case 'network': eventType = netSubtype === 'alert' ? 'NETWORK_ANOMALY' : 'NETWORK_FLOW'; break;\n    case 'door': {\n        const s = (p.state || '').toUpperCase();\n        eventType = s === 'FORCED'                    ? 'DOOR_FORCED'\n                  : (s === 'CLOSE' || s === 'CLOSED') ? 'DOOR_CLOSED'\n                  : 'DOOR_OPENED';\n        break;\n    }\n    default:\n        node.error('Unknown sensorType: ' + sensorType, msg);\n        return null;\n}\n\n// ── 2. source_layer ──────────────────────────────────────────────────\nconst sourceLayer = sensorType === 'network' ? 'CYBER' : 'PHYSICAL';\n\n// ── 3. severity_raw ──────────────────────────────────────────────────\nlet severityRaw = 'INFO';\nif (eventType === 'BADGE_ACCESS' &&\n    (p.access_result === 'DENIED' || p.access_result === 'TIMEOUT')) {\n    severityRaw = 'WARNING';\n} else if (eventType === 'DOOR_FORCED' || eventType === 'NETWORK_ANOMALY') {\n    severityRaw = 'ALERT';\n}\n\n// ── 4. payload (kind MUST equal event_type — Pydantic discriminated union) ──\nlet normalizedPayload;\nif (eventType === 'BADGE_ACCESS') {\n    normalizedPayload = {\n        kind:             eventType,\n        badge_id:         p.badge_id,\n        reader_device_id: p.reader_device_id || deviceId,\n        access_result:    p.access_result\n    };\n} else if (eventType === 'DOOR_OPENED' ||\n           eventType === 'DOOR_CLOSED' ||\n           eventType === 'DOOR_FORCED') {\n    normalizedPayload = { kind: eventType, door_id: p.door_id };\n    if (p.duration_open_seconds != null) {\n        normalizedPayload.duration_open_seconds = p.duration_open_seconds;\n    }\n} else if (eventType === 'MOTION_DETECTED') {\n    normalizedPayload = {\n        kind:               eventType,\n        detector_device_id: p.detector_device_id\n    };\n    if (p.entity_count != null) {\n        normalizedPayload.entity_count = p.entity_count;\n    }\n} else if (eventType === 'CAMERA_EVENT') {\n    normalizedPayload = {\n        kind:             eventType,\n        camera_device_id: p.camera_device_id,\n        event_subtype:    p.event_subtype,\n        snapshot_url:     p.snapshot_url != null ? p.snapshot_url : null\n    };\n} else if (eventType === 'NETWORK_FLOW') {\n    normalizedPayload = {\n        kind:               eventType,\n        src_ip:             p.src_ip,\n        dst_ip:             p.dst_ip,\n        dst_port:           p.dst_port           != null ? p.dst_port           : null,\n        protocol:           p.protocol,\n        bytes_sent:         p.bytes_sent,\n        bytes_received:     p.bytes_received,\n        duration_seconds:   p.duration_seconds   != null ? p.duration_seconds   : null,\n        distinct_dst_ports: p.distinct_dst_ports  != null ? p.distinct_dst_ports : null\n    };\n} else if (eventType === 'NETWORK_ANOMALY') {\n    normalizedPayload = {\n        kind:     eventType,\n        label:    p.label,\n        evidence: p.evidence\n    };\n}\n\n// ── 5. Assemble the 13-field UnifiedEvent ────────────────────────────\n// ai_score and ai_classification MUST NOT be present (Pydantic extra='forbid')\n// The AI engine fills them downstream after consuming events.raw.\nmsg.payload = {\n    event_id:            uuidv4(),\n    event_type:          eventType,\n    source_layer:        sourceLayer,\n    timestamp:           p.timestamp || new Date().toISOString(),\n    building_id:         buildingId,\n    zone_id:             zoneId,\n    device_id:           deviceId,\n    user_id:             p.user_id != null ? p.user_id : null,\n    severity_raw:        severityRaw,\n    payload:             normalizedPayload,\n    correlated_events:   [],\n    schema_version:      '1.0.0',\n    ingestion_timestamp: new Date().toISOString()\n};\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 390,
+        "y": 300,
+        "wires": [
+            [
+                "validate200001"
+            ]
+        ]
+    },
+    {
+        "id": "validate200001",
+        "type": "function",
+        "z": "flow2tab00000001",
+        "name": "Validate before Kafka",
+        "func": "// Final gate before events.raw — mirrors Pydantic constraints (extra='forbid')\nconst e = msg.payload;\n\nconst REQUIRED = [\n    'event_id', 'event_type', 'source_layer', 'timestamp',\n    'building_id', 'zone_id', 'device_id', 'user_id',\n    'severity_raw', 'payload', 'correlated_events',\n    'schema_version', 'ingestion_timestamp'\n];\nconst PROHIBITED = ['ai_score', 'ai_classification'];\n\n// All 13 required fields must be defined\n// user_id: null is valid (contract allows null) — only undefined is rejected\nconst missing = REQUIRED.filter(f => e[f] === undefined);\nif (missing.length) {\n    msg.validationError = 'Missing required fields: ' + missing.join(', ');\n    return [null, msg];\n}\n\n// Prohibited fields must be absent — AI engine fills these downstream\nconst forbidden = PROHIBITED.filter(f => e[f] !== undefined);\nif (forbidden.length) {\n    msg.validationError = 'Prohibited fields present (AI engine fills them): ' + forbidden.join(', ');\n    return [null, msg];\n}\n\n// payload.kind must equal event_type (Pydantic discriminated union)\nif (!e.payload || e.payload.kind !== e.event_type) {\n    msg.validationError =\n        'payload.kind (' + (e.payload && e.payload.kind) + ')' +\n        ' != event_type (' + e.event_type + ')';\n    return [null, msg];\n}\n\n// correlated_events must be an array (may be empty)\nif (!Array.isArray(e.correlated_events)) {\n    msg.validationError = 'correlated_events must be an array, got: ' + typeof e.correlated_events;\n    return [null, msg];\n}\n\n// schema_version must be pinned to contract version\nif (e.schema_version !== '1.0.0') {\n    msg.validationError = 'schema_version must be \"1.0.0\", got: ' + e.schema_version;\n    return [null, msg];\n}\n\nreturn [msg, null];",
+        "outputs": 2,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 670,
+        "y": 300,
+        "wires": [
+            [
+                "debugvalid200001",
+                "500fb64e9354f042"
+            ],
+            [
+                "debuginvalid20001"
+            ]
+        ],
+        "outputLabels": [
+            "valid — ready for Kafka",
+            "invalid — check validationError"
+        ]
+    },
+    {
+        "id": "debugvalid200001",
+        "type": "debug",
+        "z": "flow2tab00000001",
+        "name": "✓ UnifiedEvent ready",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 930,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "debuginvalid20001",
+        "type": "debug",
+        "z": "flow2tab00000001",
+        "name": "✗ Normalisation error (check msg.validationError)",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 980,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "500fb64e9354f042",
+        "type": "json",
+        "z": "flow2tab00000001",
+        "name": "",
+        "property": "payload",
+        "action": "str",
+        "pretty": false,
+        "x": 910,
+        "y": 300,
+        "wires": [
+            [
+                "3d8ab5a9d4be0504"
+            ]
+        ]
+    },
+    {
+        "id": "3d8ab5a9d4be0504",
+        "type": "kafkajs-producer",
+        "z": "flow2tab00000001",
+        "name": "events.raw producer",
+        "client": "aae5efe671ec08ec",
+        "topic": "events.raw",
+        "advancedoptions": false,
+        "acknowledge": "all",
+        "partition": "",
+        "headeritems": {},
+        "key": "",
+        "responsetimeout": 30000,
+        "transactiontimeout": 60000,
+        "metadatamaxage": 300000,
+        "allowautotopiccreation": false,
+        "x": 1240,
+        "y": 300,
+        "wires": []
+    },
+    {
+        "id": "comment5000000001",
+        "type": "comment",
+        "z": "flow5tab00000001",
+        "name": "Flow 5 — Device Health Monitoring\nPath A: heartbeat tracker (link in ← Flow 1 valid events)\nPath B: 30s timer → offline check → MQTT alert\nContract: NODERED_CONTRACT.md §5.7 DEVICE_STATUS",
+        "info": "",
+        "x": 300,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "comment5000000002",
+        "type": "comment",
+        "z": "flow5tab00000001",
+        "name": "HOW TO CONNECT FLOW 1:\nAdd the same 'link out' nodes used for Flow 2 to also target this link in (id: linkin500000001).\nOR add a second link out in Flow 1 pointing here.",
+        "info": "",
+        "x": 300,
+        "y": 155,
+        "wires": []
+    },
+    {
+        "id": "linkin500000001",
+        "type": "link in",
+        "z": "flow5tab00000001",
+        "name": "Device heartbeat tracker",
+        "links": [
+            "67bea9173062bc60"
+        ],
+        "x": 135,
+        "y": 260,
+        "wires": [
+            [
+                "updatelastseen01"
+            ]
+        ]
+    },
+    {
+        "id": "updatelastseen01",
+        "type": "function",
+        "z": "flow5tab00000001",
+        "name": "Update last seen",
+        "func": "// Record the current timestamp for this device in flow context.\n// flow.lastSeen = { [deviceId]: epochMs, ... }\n// Shared with 'Check device health' on the timer path.\nif (!msg.deviceId) {\n    return null; // skip messages with no deviceId (safety guard)\n}\n\nconst lastSeen = flow.get('lastSeen') || {};\nlastSeen[msg.deviceId] = Date.now();\nflow.set('lastSeen', lastSeen);\n\n// No output — this node is a pure side-effect sink\nreturn null;",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 390,
+        "y": 260,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "inject500000001",
+        "type": "inject",
+        "z": "flow5tab00000001",
+        "name": "Every 30s — health check timer",
+        "props": [
+            {
+                "p": "payload"
+            },
+            {
+                "p": "topic",
+                "vt": "str"
+            }
+        ],
+        "repeat": "30",
+        "crontab": "",
+        "once": true,
+        "onceDelay": 5,
+        "topic": "",
+        "payload": "",
+        "payloadType": "date",
+        "x": 170,
+        "y": 400,
+        "wires": [
+            [
+                "checkhealth00001"
+            ]
+        ]
+    },
+    {
+        "id": "checkhealth00001",
+        "type": "function",
+        "z": "flow5tab00000001",
+        "name": "Check device health",
+        "func": "// Reads flow.lastSeen and flags devices silent for > OFFLINE_THRESHOLD_MS.\n// Returns one msg per offline device on output 1, or null if all healthy.\nconst OFFLINE_THRESHOLD_MS = 120000; // 2 minutes\n\nconst lastSeen = flow.get('lastSeen');\nif (!lastSeen || Object.keys(lastSeen).length === 0) {\n    return null; // no devices seen yet — nothing to check\n}\n\nconst now = Date.now();\nconst offlineMsgs = [];\n\nfor (const deviceId of Object.keys(lastSeen)) {\n    const lastTs = lastSeen[deviceId];\n    if (now - lastTs > OFFLINE_THRESHOLD_MS) {\n        // Build a DEVICE_STATUS message — NODERED_CONTRACT.md §5.7\n        offlineMsgs.push({\n            topic:      'building/B1/zone/GLOBAL/device/' + deviceId,\n            sensorType: 'device_status',\n            deviceId:   deviceId,\n            buildingId: 'B1',\n            zoneId:     'GLOBAL',\n            payload: {\n                kind:           'DEVICE_STATUS',\n                status:         'OFFLINE',\n                last_heartbeat: new Date(lastTs).toISOString()\n            }\n        });\n    }\n}\n\nif (offlineMsgs.length === 0) {\n    return null; // all devices healthy\n}\n\n// [[msg1, msg2, ...]] — Node-RED sends each element as a separate message on output 1\nreturn [offlineMsgs];",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 430,
+        "y": 400,
+        "wires": [
+            [
+                "debugoffline0001",
+                "mqttout500000001"
+            ]
+        ]
+    },
+    {
+        "id": "debugoffline0001",
+        "type": "debug",
+        "z": "flow5tab00000001",
+        "name": "⚠ Device OFFLINE",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "true",
+        "targetType": "full",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 680,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "mqttout500000001",
+        "type": "mqtt out",
+        "z": "flow5tab00000001",
+        "name": "building/B1/device/alert",
+        "topic": "building/B1/device/alert",
+        "qos": "1",
+        "retain": "false",
+        "respTopic": "",
+        "contentType": "",
+        "userProps": "",
+        "correl": "",
+        "expiry": "",
+        "broker": "mqttbroker000001",
+        "x": 690,
+        "y": 460,
+        "wires": []
+    },
+    {
+        "id": "f6c0cb5c3a5b9983",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-contrib-kafkajs": "0.0.7"
+        }
+    }
+]
