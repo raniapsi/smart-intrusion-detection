@@ -108,6 +108,45 @@ services:
     restart: "no"
 
   # --------------------------------------------------------------------------
+  # MQTT broker + Node-RED middleware
+  #
+  # Node-RED plays the layer-5 role described in the team architecture
+  # document: subscribe to MQTT topics published by the simulator/gateway,
+  # normalise to the Unified Event Schema, and publish on Kafka events.raw.
+  # The FastAPI middleware runs in parallel for HTTP-based ingestion — both
+  # paths feed events.raw and the AI engine consumer doesn't differentiate.
+  # --------------------------------------------------------------------------
+
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: smart-mosquitto
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config:ro
+    restart: unless-stopped
+
+  nodered:
+    build:
+      context: ./nodered
+    container_name: smart-nodered
+    ports:
+      - "1880:1880"
+    environment:
+      NR_KAFKA_BROKERS: kafka:9092
+      TZ: Europe/Paris
+    volumes:
+      # Bind-mount the single flows.json so the flow is versioned in git.
+      # Other Node-RED state (settings, node_modules) stays inside the image.
+      - ./nodered/flows.json:/data/flows.json
+    depends_on:
+      mosquitto:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # --------------------------------------------------------------------------
   # Application services
   # --------------------------------------------------------------------------
 

@@ -1,0 +1,130 @@
+[
+    {
+        "id": "tab-middleware",
+        "type": "tab",
+        "label": "MQTT → Kafka middleware",
+        "disabled": false,
+        "info": "Subscribes to the MQTT topics declared in the architecture document, normalises payloads to the Unified Event Schema, and publishes on the Kafka topic events.raw. Mirrors the role of middleware/app/services/ai_engine_client.to_unified_event() but for the MQTT path instead of the HTTP path."
+    },
+    {
+        "id": "mqtt-broker-cfg",
+        "type": "mqtt-broker",
+        "name": "mosquitto",
+        "broker": "mosquitto",
+        "port": "1883",
+        "clientid": "nodered-middleware",
+        "autoConnect": true,
+        "usetls": false,
+        "protocolVersion": "4",
+        "keepalive": "60",
+        "cleansession": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthPayload": "",
+        "closeTopic": "",
+        "closeQos": "0",
+        "closePayload": "",
+        "willTopic": "",
+        "willQos": "0",
+        "willPayload": ""
+    },
+    {
+        "id": "mqtt-in-badge",
+        "type": "mqtt in",
+        "z": "tab-middleware",
+        "name": "badge",
+        "topic": "building/+/zone/+/badge/+",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "mqtt-broker-cfg",
+        "x": 140,
+        "y": 80,
+        "wires": [["fn-normalize"]]
+    },
+    {
+        "id": "mqtt-in-door",
+        "type": "mqtt in",
+        "z": "tab-middleware",
+        "name": "door",
+        "topic": "building/+/zone/+/door/+",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "mqtt-broker-cfg",
+        "x": 140,
+        "y": 140,
+        "wires": [["fn-normalize"]]
+    },
+    {
+        "id": "mqtt-in-motion",
+        "type": "mqtt in",
+        "z": "tab-middleware",
+        "name": "motion",
+        "topic": "building/+/zone/+/motion/+",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "mqtt-broker-cfg",
+        "x": 140,
+        "y": 200,
+        "wires": [["fn-normalize"]]
+    },
+    {
+        "id": "mqtt-in-net-flow",
+        "type": "mqtt in",
+        "z": "tab-middleware",
+        "name": "network/flow",
+        "topic": "building/+/network/flow",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "mqtt-broker-cfg",
+        "x": 160,
+        "y": 260,
+        "wires": [["fn-normalize"]]
+    },
+    {
+        "id": "mqtt-in-net-alert",
+        "type": "mqtt in",
+        "z": "tab-middleware",
+        "name": "network/alert",
+        "topic": "building/+/network/alert",
+        "qos": "1",
+        "datatype": "json",
+        "broker": "mqtt-broker-cfg",
+        "x": 160,
+        "y": 320,
+        "wires": [["fn-normalize"]]
+    },
+    {
+        "id": "fn-normalize",
+        "type": "function",
+        "z": "tab-middleware",
+        "name": "normalize → UnifiedEvent",
+        "func": "const parts = msg.topic.split('/');\nconst buildingId = parts[1] || 'B1';\nconst p = msg.payload || {};\n\nlet evt = null;\n\nif (parts[2] === 'zone' && parts[4] === 'badge') {\n    const zoneId = parts[3];\n    const readerId = parts[5];\n    evt = {\n        event_type: 'BADGE_ACCESS',\n        source_layer: 'PHYSICAL',\n        severity_raw: 'INFO',\n        zone_id: zoneId,\n        device_id: readerId,\n        user_id: p.user_id || null,\n        payload: {\n            kind: 'BADGE_ACCESS',\n            badge_id: String(p.badge_id || 'unknown'),\n            reader_device_id: readerId,\n            access_result: String(p.access_result || 'GRANTED').toUpperCase(),\n            door_id: p.door_id || null\n        }\n    };\n} else if (parts[2] === 'zone' && parts[4] === 'door') {\n    const zoneId = parts[3];\n    const doorId = parts[5];\n    const state = String(p.state || 'OPEN').toUpperCase();\n    let etype = 'DOOR_OPENED';\n    let sev = 'INFO';\n    if (state === 'FORCED') { etype = 'DOOR_FORCED'; sev = 'ALERT'; }\n    else if (state === 'CLOSED') { etype = 'DOOR_CLOSED'; }\n    const payload = { kind: etype, door_id: doorId, state: state };\n    if (state === 'FORCED') {\n        payload.no_badge_window_seconds = parseFloat(p.no_badge_window_seconds || 10);\n    } else if (state === 'CLOSED' && p.open_duration_seconds !== undefined) {\n        payload.open_duration_seconds = parseFloat(p.open_duration_seconds);\n    }\n    evt = {\n        event_type: etype,\n        source_layer: 'PHYSICAL',\n        severity_raw: sev,\n        zone_id: zoneId,\n        device_id: doorId,\n        user_id: null,\n        payload: payload\n    };\n} else if (parts[2] === 'zone' && parts[4] === 'motion') {\n    const zoneId = parts[3];\n    const detectorId = parts[5];\n    evt = {\n        event_type: 'MOTION_DETECTED',\n        source_layer: 'PHYSICAL',\n        severity_raw: 'INFO',\n        zone_id: zoneId,\n        device_id: detectorId,\n        user_id: null,\n        payload: {\n            kind: 'MOTION_DETECTED',\n            detector_device_id: detectorId,\n            entity_count: parseInt(p.entity_count) || 1\n        }\n    };\n} else if (parts[2] === 'network' && parts[3] === 'alert') {\n    evt = {\n        event_type: 'NETWORK_ANOMALY',\n        source_layer: 'CYBER',\n        severity_raw: 'ALERT',\n        zone_id: p.zone_id || 'UNKNOWN',\n        device_id: p.device_id || 'unknown',\n        user_id: null,\n        payload: {\n            kind: 'NETWORK_ANOMALY',\n            anomaly_label: String(p.anomaly_label || 'UNKNOWN').toUpperCase(),\n            src_ip: String(p.src_ip || '0.0.0.0'),\n            severity_hint: parseFloat(p.severity_hint) || 0.7\n        }\n    };\n} else if (parts[2] === 'network' && parts[3] === 'flow') {\n    evt = {\n        event_type: 'NETWORK_FLOW',\n        source_layer: 'CYBER',\n        severity_raw: 'INFO',\n        zone_id: p.zone_id || 'UNKNOWN',\n        device_id: p.device_id || 'unknown',\n        user_id: null,\n        payload: {\n            kind: 'NETWORK_FLOW',\n            src_ip: String(p.src_ip || '0.0.0.0'),\n            dst_ip: String(p.dst_ip || '0.0.0.0'),\n            bytes_out: parseInt(p.bytes_out || p.bytes_sent) || 0,\n            bytes_in: parseInt(p.bytes_in || p.bytes_received) || 0,\n            distinct_dst_ports: parseInt(p.distinct_dst_ports) || 1,\n            window_seconds: parseFloat(p.window_seconds) || 60.0\n        }\n    };\n} else {\n    node.warn('unknown topic shape: ' + msg.topic);\n    return null;\n}\n\nconst now = new Date().toISOString();\nconst ts = p.timestamp || now;\n\nmsg.payload = {\n    event_id: crypto.randomUUID(),\n    schema_version: '1.0.0',\n    event_type: evt.event_type,\n    source_layer: evt.source_layer,\n    timestamp: ts,\n    ingestion_timestamp: now,\n    building_id: buildingId,\n    zone_id: evt.zone_id,\n    device_id: evt.device_id,\n    user_id: evt.user_id,\n    severity_raw: evt.severity_raw,\n    payload: evt.payload,\n    correlated_events: []\n};\nreturn msg;\n",
+        "outputs": 1,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [
+            { "var": "crypto", "module": "crypto" }
+        ],
+        "x": 420,
+        "y": 200,
+        "wires": [["fn-publish"]]
+    },
+    {
+        "id": "fn-publish",
+        "type": "function",
+        "z": "tab-middleware",
+        "name": "publish → Kafka events.raw",
+        "func": "const producer = context.get('producer');\nif (!producer) {\n    node.warn('kafka producer not connected yet');\n    return null;\n}\ntry {\n    await producer.send({\n        topic: 'events.raw',\n        messages: [{ value: JSON.stringify(msg.payload) }]\n    });\n    node.status({ fill: 'green', shape: 'dot', text: 'sent ' + msg.payload.event_type });\n} catch (err) {\n    node.warn('kafka send failed: ' + err.message);\n    node.status({ fill: 'red', shape: 'ring', text: err.message });\n}\nreturn null;\n",
+        "outputs": 0,
+        "noerr": 0,
+        "initialize": "const { Kafka } = kafkajs;\nconst brokers = (env.get('NR_KAFKA_BROKERS') || 'kafka:9092').split(',');\nconst kafka = new Kafka({ clientId: 'nodered-middleware', brokers: brokers });\nconst producer = kafka.producer({ allowAutoTopicCreation: false });\nawait producer.connect();\ncontext.set('producer', producer);\nnode.log('kafka producer connected to ' + brokers.join(','));\nnode.status({ fill: 'blue', shape: 'dot', text: 'connected' });\n",
+        "finalize": "const producer = context.get('producer');\ncontext.set('producer', null);\nif (producer) {\n    producer.disconnect().catch(function () {});\n}\n",
+        "libs": [
+            { "var": "kafkajs", "module": "kafkajs" }
+        ],
+        "x": 740,
+        "y": 200,
+        "wires": []
+    }
+]

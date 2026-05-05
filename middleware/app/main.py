@@ -7,6 +7,10 @@ from app.api.routes import router
 from app.core.config import settings
 from app.services.kafka_producer import publisher as kafka_publisher
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 

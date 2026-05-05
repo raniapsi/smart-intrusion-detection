@@ -40,7 +40,8 @@ middle and upper part of the stack:
 │                                                              │
 │ [6] STREAMING — Apache Kafka (events.raw, .enriched, …) ✓    │
 │                                                              │
-│ [5] MIDDLEWARE — FastAPI ingest + normalisation         ✓    │
+│ [5] MIDDLEWARE — FastAPI (HTTP) + Node-RED (MQTT)       ✓    │
+│       Mosquitto MQTT broker + Node-RED flow                  │
 │ ──────────────────────────────────────────────────────────── │
 │ [4] SECURITY — PQC TLS / hybrid signatures              ✗    │
 │ [3] GATEWAY — software MQTT bridge                      ✗    │
@@ -50,9 +51,27 @@ middle and upper part of the stack:
 ```
 
 The middleware exposes a plain HTTP `/api/events` endpoint, which is the
-contract used by both the simulator team and a future Node-RED integration.
-The exact JSON shape on `events.raw` (the **Unified Event Schema**) follows
+contract used by the simulator team and any other upstream producer. The
+exact JSON shape on `events.raw` (the **Unified Event Schema**) follows
 section 5.3 of the team architecture document.
+
+> **Two ingestion paths coexist.** Both feed the same Kafka topic
+> `events.raw` and the AI engine doesn't differentiate them:
+>
+> 1. **HTTP path** — `POST /api/events` on the FastAPI service in
+>    [middleware/](middleware/). Used by `curl` smoke tests, the auto-alert
+>    generator, and any HTTP-only producer.
+> 2. **MQTT path** — Mosquitto broker + Node-RED flow in
+>    [nodered/flows.json](nodered/flows.json), the canonical layer-5 setup
+>    described by the team architecture document. Used by the simulator
+>    (when it publishes on the canonical `building/{id}/zone/...` topics)
+>    and any other MQTT producer.
+>
+> The Node-RED flow performs the exact same normalisation as
+> `middleware/app/services/ai_engine_client.to_unified_event()` so the
+> two paths emit identical Unified Event Schema messages on `events.raw`.
+> The field-level contract is documented in
+> [ai-engine/doc/NODERED_CONTRACT.md](ai-engine/doc/NODERED_CONTRACT.md).
 
 ---
 
@@ -104,11 +123,27 @@ Key files:
 | [ai-engine/doc/KAFKA_INTEGRATION.md](ai-engine/doc/KAFKA_INTEGRATION.md) | Full Kafka contract + troubleshooting guide |
 | [ai-engine/doc/NODERED_CONTRACT.md](ai-engine/doc/NODERED_CONTRACT.md) | Field-level `UnifiedEvent` contract for upstream producers |
 
-### 2.3 Root orchestration
+### 2.3 `mosquitto/` + `nodered/` — MQTT broker and Node-RED middleware
+
+The MQTT path uses Eclipse Mosquitto as broker and a Node-RED flow that
+subscribes to the canonical sensor topics, normalises payloads, and
+publishes on Kafka `events.raw`.
 
 | File | Purpose |
 |---|---|
-| [docker-compose.yml](docker-compose.yml) | Zookeeper + Kafka + `kafka-init` (topic creation) + middleware + ai-backend + dashboard + optional alert-sender |
+| [mosquitto/config/mosquitto.conf](mosquitto/config/mosquitto.conf) | Anonymous broker config — Docker-internal listener only |
+| [nodered/Dockerfile](nodered/Dockerfile) | Extends `nodered/node-red:4.0` and installs `kafkajs` so function nodes can produce on Kafka |
+| [nodered/flows.json](nodered/flows.json) | Single tab with 5 MQTT-in nodes (badge / door / motion / network flow / network alert), one normalisation function (Unified Event Schema), one publish function (`kafkajs` producer → `events.raw`) |
+
+The Node-RED editor is exposed on `http://localhost:1880` for live edits.
+Flow changes saved via the UI are written back to `nodered/flows.json`
+(bind-mounted), so they are versioned in git.
+
+### 2.4 Root orchestration
+
+| File | Purpose |
+|---|---|
+| [docker-compose.yml](docker-compose.yml) | Zookeeper + Kafka + `kafka-init` + Mosquitto + Node-RED + middleware + ai-backend + dashboard + optional alert-sender |
 | [DOCKER.md](DOCKER.md) | Compose quick-start |
 
 ---
@@ -116,17 +151,23 @@ Key files:
 ## 3. End-to-end data flow
 
 ```
-HTTP POST /api/events
-        │
-        ▼
-┌─────────────────────────┐
-│  middleware (FastAPI)   │
-│  - validates Event      │
-│  - normalises → Unified │   Kafka primary
-│  - publishes ────────────────────────────┐
-│  - HTTP fallback ◀── (only if Kafka KO)  │
-└─────────────────────────┘                │
-                                           ▼
+HTTP POST /api/events             MQTT building/B1/zone/Z3/badge/R07
+       │                                │
+       ▼                                ▼
+┌─────────────────────┐         ┌──────────────────────┐
+│ middleware FastAPI  │         │  Mosquitto broker    │
+│ - validates Event   │         └──────────┬───────────┘
+│ - normalises Unified│                    │
+│ - kafka publish ────┐                    ▼
+│ - HTTP fallback ◀── │         ┌──────────────────────┐
+└─────────────────────┘         │ Node-RED flow        │
+                       │         │ - parse topic        │
+                       │         │ - normalise Unified  │
+                       │         │ - kafkajs producer ──┐
+                       │         └──────────────────────┘
+                       │                                │
+                       └──────────────┬─────────────────┘
+                                      ▼
                               ┌──────────────────────────┐
                               │ Kafka topic: events.raw  │
                               └──────────────────────────┘
@@ -151,9 +192,10 @@ HTTP POST /api/events
                                 └─────────────────────┘
 ```
 
-Both the Kafka path and the HTTP fallback eventually call the same
-`ScoringPipeline.process_event()`, so query results stay consistent
-regardless of which transport is used.
+Both the HTTP-based middleware and the MQTT/Node-RED pipeline emit
+identical Unified Event Schema messages on `events.raw`. The AI engine
+runs the same `ScoringPipeline.process_event()` on every message
+regardless of which producer published it.
 
 ---
 
@@ -214,6 +256,60 @@ not cause the middleware to reject the event.
 
 ## 6. Running the stack
 
+### 6.1 Prerequisites — AI artefacts
+
+`ai-engine/Dockerfile` bakes two trained artefacts into the image at build
+time:
+
+- `ai-engine/features/output/baselines.json` — per-user / per-device
+  behavioural baselines learned from 30 days of synthetic traffic.
+- `ai-engine/models/trained/isoforest.joblib` — trained Isolation Forest.
+
+**They are not committed.** If they are missing, `docker compose up --build`
+will fail at the `COPY` step. Generate them once with the four commands
+below (run from `ai-engine/`):
+
+```bash
+cd ai-engine
+pip3 install -e ".[dev]"
+
+# 1) Build the topology (50 users, 8 zones, 7 doors, 30 devices)
+python3 -m dataset.cli build-topology \
+    --out dataset/topology/building_b1.yaml
+
+# 2) Generate 30 days of normal baseline events (training data)
+python3 -m dataset.cli generate-baseline \
+    --topology dataset/topology/building_b1.yaml \
+    --start 2026-04-01 --days 30 --seed 42 \
+    --out dataset/output/train_baseline.jsonl
+
+# 3) Learn behavioural baselines from the training data
+python3 -m features.cli learn-baselines \
+    --topology dataset/topology/building_b1.yaml \
+    --events dataset/output/train_baseline.jsonl \
+    --out features/output/baselines.json
+
+# 4) Extract features and train the Isolation Forest
+python3 -m features.cli extract \
+    --topology dataset/topology/building_b1.yaml \
+    --baselines features/output/baselines.json \
+    --events dataset/output/train_baseline.jsonl \
+    --out features/output/train_features.parquet
+
+python3 -m models.cli train \
+    --features features/output/train_features.parquet \
+    --out models/trained/isoforest.joblib
+```
+
+After those commands, the two required files exist and the Compose build
+will succeed. They only need to be regenerated when the topology, the
+training data, or the model hyper-parameters change.
+
+The full reproduction pipeline (including the seven attack scenarios and
+batch scoring) is documented in [ai-engine/README.md](ai-engine/README.md).
+
+### 6.2 Bring the stack up
+
 Prerequisites: Docker Desktop ≥ 24.
 
 ```bash
@@ -233,7 +329,9 @@ Services and ports:
 |---|---|
 | Dashboard | http://localhost:5173 |
 | AI backend (REST + WS) | http://localhost:8000 |
-| Middleware | http://localhost:8010 |
+| Middleware (HTTP path) | http://localhost:8010 |
+| Node-RED editor (MQTT path) | http://localhost:1880 |
+| Mosquitto MQTT broker | `localhost:1883` |
 | Kafka (host listener) | `localhost:29092` |
 
 To enable the demo event generator (random scenarios every few seconds):
@@ -276,8 +374,15 @@ The full surface is documented in [ai-engine/README.md](ai-engine/README.md). Hi
 
 ```
 smart-intrusion-detection/
-├── docker-compose.yml          ← Zookeeper, Kafka, kafka-init, app services
+├── docker-compose.yml          ← Zookeeper, Kafka, kafka-init, Mosquitto,
+│                                  Node-RED, middleware, ai-backend, dashboard
 ├── DOCKER.md                   ← Compose quick-start
+│
+├── mosquitto/
+│   └── config/mosquitto.conf   ← anonymous local-network broker
+├── nodered/
+│   ├── Dockerfile              ← extends nodered/node-red:4.0 + kafkajs
+│   └── flows.json              ← MQTT in → normalise → Kafka events.raw
 │
 ├── middleware/                 ← FastAPI ingest service
 │   ├── Dockerfile
@@ -354,6 +459,24 @@ Both services are env-driven. The defaults below match the values set in
 | `KAFKA_TOPIC_ALERTS` | `alerts.critical` | Outbound alerts topic |
 | `KAFKA_GROUP` | `ai-engine-scoring` | Consumer group |
 
+### Node-RED
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `NR_KAFKA_BROKERS` | `kafka:9092` | Bootstrap servers used by the `kafkajs` producer in `flows.json` |
+
+The MQTT broker host is hard-coded to `mosquitto:1883` in the broker
+config node (changeable via the Node-RED editor at `http://localhost:1880`).
+The five subscribed topics are:
+
+```
+building/+/zone/+/badge/+         → BADGE_ACCESS
+building/+/zone/+/door/+          → DOOR_OPENED / DOOR_CLOSED / DOOR_FORCED
+building/+/zone/+/motion/+        → MOTION_DETECTED
+building/+/network/flow           → NETWORK_FLOW
+building/+/network/alert          → NETWORK_ANOMALY
+```
+
 The CLI flags exposed by `python -m backend.cli serve` mirror these
 variables and are documented in
 [ai-engine/backend/cli.py](ai-engine/backend/cli.py).
@@ -379,32 +502,55 @@ docker exec smart-kafka kafka-console-consumer \
     --bootstrap-server kafka:9092 \
     --topic events.raw --from-beginning
 
-# 5) Send a synthetic event
+# 5) HTTP path — POST a forced-door event.
+#    DOOR_FORCED is, by construction in the rules engine, never a normal
+#    event. The AI engine assigns a high score and classifies it CRITICAL.
 curl -sS -X POST http://localhost:8010/api/events \
     -H 'Content-Type: application/json' \
     -d '{
-      "event_id": "test-001",
-      "event_type": "badge_access",
-      "source_device": "R-Z3-01",
-      "location": "Z3",
+      "event_id": "http-forced-001",
+      "event_type": "door_sensor",
+      "source_device": "D-Z2-Z8",
+      "location": "Z8",
       "details": {
-        "user_id": "u042",
-        "badge_id": "b042",
-        "access_result": "DENIED"
+        "door_id": "D-Z2-Z8",
+        "state": "FORCED",
+        "no_badge_window_seconds": 12.0
       }
     }'
 
 # 6) The JSON appears in step 4's consumer.
 #    Middleware logs show "kafka first delivery confirmed: topic=events.raw …".
 
-# 7) Confirm the AI engine consumed it
+# 7) MQTT path — publish the same scenario through Mosquitto → Node-RED.
+docker exec smart-mosquitto mosquitto_pub \
+    -h localhost -t 'building/B1/zone/Z8/door/D-Z2-Z8' \
+    -m '{"state":"FORCED","no_badge_window_seconds":12.0}'
+
+#    Step-4 consumer should print a UnifiedEvent with event_type
+#    "DOOR_FORCED" produced by Node-RED. Editor at http://localhost:1880
+#    shows a green "sent DOOR_FORCED" status under the publish node.
+
+# 8) Confirm the AI engine classified the event CRITICAL — read the
+#    alerts topic. Each forced-door event produces one alert.
 docker exec smart-kafka kafka-console-consumer \
     --bootstrap-server kafka:9092 \
-    --topic events.enriched --from-beginning --max-messages 1
+    --topic alerts.critical --from-beginning --timeout-ms 5000
+# expected (compact form):
+#   {"alert_id":"…","level":"CRITICAL","ai_score":0.85+,
+#    "event_type":"DOOR_FORCED","zone_id":"Z8", …}
 
-# 8) Open the dashboard
+# 9) Open the dashboard — the Z8 zone should turn red and the alert
+#    feed should show the two DOOR_FORCED events (one HTTP, one MQTT).
 open http://localhost:5173
 ```
+
+> **Want a NORMAL or SUSPECT event instead?** Replace the door payload
+> with a `badge_access` (NORMAL for a granted badge, SUSPECT for a denied
+> one outside hours). Replace `state: "FORCED"` with `"OPEN"` for a
+> trivial door event. The seven calibrated attack scenarios are
+> documented in section 12 of the team architecture document and
+> reproducible via `python3 -m dataset.cli generate-all-scenarios`.
 
 If any step fails, the troubleshooting section of
 [ai-engine/doc/KAFKA_INTEGRATION.md](ai-engine/doc/KAFKA_INTEGRATION.md)
