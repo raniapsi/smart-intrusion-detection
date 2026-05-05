@@ -87,6 +87,11 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         cors_origins=args.cors_origins or ["*"],
         baselines_path=baselines_path,
         model_path=model_path,
+        kafka_brokers=args.kafka_brokers,
+        kafka_topic_raw=args.kafka_topic_raw,
+        kafka_topic_enriched=args.kafka_topic_enriched,
+        kafka_topic_alerts=args.kafka_topic_alerts,
+        kafka_consumer_group=args.kafka_consumer_group,
     )
 
     logging.basicConfig(
@@ -146,6 +151,30 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--model",
         help="Trained Isolation Forest joblib path; required with --baselines",
+    )
+    p.add_argument(
+        "--kafka-brokers",
+        help="Kafka bootstrap servers. Enables the background Kafka consumer.",
+    )
+    p.add_argument(
+        "--kafka-topic-raw",
+        default="events.raw",
+        help="Kafka topic consumed by the AI engine.",
+    )
+    p.add_argument(
+        "--kafka-topic-enriched",
+        default="events.enriched",
+        help="Kafka topic where enriched events are published.",
+    )
+    p.add_argument(
+        "--kafka-topic-alerts",
+        default="alerts.critical",
+        help="Kafka topic where generated alerts are published.",
+    )
+    p.add_argument(
+        "--kafka-consumer-group",
+        default="ai-engine-scoring",
+        help="Kafka consumer group for the AI engine.",
     )
     p.set_defaults(func=_cmd_serve)
 

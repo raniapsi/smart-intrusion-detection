@@ -1,37 +1,43 @@
 """
 Scoring service CLI.
 
-Two commands:
+Three commands:
 
-1. score-batch: run the pipeline on a JSONL of UnifiedEvents and write
+1. score-batch — run the pipeline on a JSONL of UnifiedEvents and write
    enriched.jsonl + alerts.jsonl.
 
-   python3 -m scoring_service.cli score-batch \\
-       --events dataset/output/test_forced_door.jsonl \\
-       --topology dataset/topology/building_b1.yaml \\
-       --baselines features/output/baselines.json \\
-       --model models/trained/isoforest.joblib \\
-       --enriched-out scoring_service/output/test_forced_door.enriched.jsonl \\
-       --alerts-out scoring_service/output/test_forced_door.alerts.jsonl
+       python3 -m scoring_service.cli score-batch \\
+           --events dataset/output/test_forced_door.jsonl \\
+           --topology dataset/topology/building_b1.yaml \\
+           --baselines features/output/baselines.json \\
+           --model models/trained/isoforest.joblib \\
+           --enriched-out scoring_service/output/test_forced_door.enriched.jsonl \\
+           --alerts-out scoring_service/output/test_forced_door.alerts.jsonl
 
-2. score-batch-all: same but for every test_*.jsonl in a directory.
+2. score-batch-all — same, for every test_*.jsonl in a directory.
 
-   python3 -m scoring_service.cli score-batch-all \\
-       --events-dir dataset/output \\
-       --topology dataset/topology/building_b1.yaml \\
-       --baselines features/output/baselines.json \\
-       --model models/trained/isoforest.joblib \\
-       --out-dir scoring_service/output
+3. stream — consume events.raw from Kafka, score them, and produce to
+   events.enriched + alerts.critical. Blocks until SIGINT.
+
+       python3 -m scoring_service.cli stream \\
+           --topology dataset/topology/building_b1.yaml \\
+           --baselines features/output/baselines.json \\
+           --model models/trained/isoforest.joblib \\
+           --kafka-brokers kafka:9092
 """
 
 from __future__ import annotations
 
 import argparse
+import logging
+import os
+import signal
 import sys
 from pathlib import Path
 
 from scoring_service.batch import run_batch_jsonl
 from scoring_service.pipeline import ScoringPipeline
+from scoring_service.stream import StreamConfig, StreamRunner
 
 
 def _build_pipeline(args: argparse.Namespace) -> ScoringPipeline:
@@ -69,7 +75,6 @@ def _cmd_score_batch_all(args: argparse.Namespace) -> int:
         print(f"error: events_dir not found: {events_dir}", file=sys.stderr)
         return 2
 
-    # Process every test_*.jsonl in the directory.
     files = sorted(events_dir.glob("test_*.jsonl"))
     if not files:
         print(f"no test_*.jsonl files found in {events_dir}", file=sys.stderr)
@@ -81,8 +86,7 @@ def _cmd_score_batch_all(args: argparse.Namespace) -> int:
     print(f"scoring {len(files)} files into {out_dir}", file=sys.stderr)
     failed = 0
     for ev_path in files:
-        # Output filenames: keep the test_<name> stem.
-        stem = ev_path.stem  # e.g. "test_forced_door"
+        stem = ev_path.stem
         try:
             n_enriched, n_alerts = run_batch_jsonl(
                 pipeline=pipeline,
@@ -94,7 +98,7 @@ def _cmd_score_batch_all(args: argparse.Namespace) -> int:
                 f"  {stem}: {n_enriched} enriched, {n_alerts} alerts",
                 file=sys.stderr,
             )
-        except Exception as e:  # noqa: BLE001 — keep going on per-file error
+        except Exception as e:  # noqa: BLE001
             print(f"  {stem}: ERROR {e}", file=sys.stderr)
             failed += 1
 
@@ -103,6 +107,46 @@ def _cmd_score_batch_all(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     return 0 if failed == 0 else 1
+
+
+def _cmd_stream(args: argparse.Namespace) -> int:
+    """
+    Long-lived consumer: read events.raw, score, produce events.enriched
+    and alerts.critical. Runs until Ctrl-C.
+
+    Useful when we want the AI engine to run as its own service, separate
+    from the FastAPI dashboard (microservice deployment). When using the
+    integrated mode (Kafka consumer baked into the FastAPI app), see
+    backend.cli serve --kafka-brokers instead.
+    """
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    pipeline = _build_pipeline(args)
+    config = StreamConfig(
+        kafka_brokers=args.kafka_brokers,
+        consumer_topic=args.consumer_topic,
+        producer_topic_enriched=args.producer_topic_enriched,
+        producer_topic_alerts=args.producer_topic_alerts,
+        consumer_group=args.consumer_group,
+    )
+    runner = StreamRunner(pipeline=pipeline, config=config)
+
+    def _on_signal(signum, frame):  # noqa: ARG001
+        print("stopping kafka stream...", file=sys.stderr)
+        runner.stop()
+
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+
+    print(
+        f"kafka stream consuming {config.consumer_topic} from {config.kafka_brokers}",
+        file=sys.stderr,
+    )
+    runner.start()
+    return 0
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -135,6 +179,35 @@ def _build_parser() -> argparse.ArgumentParser:
     for a, kw in common:
         p_all.add_argument(*a, **kw)
     p_all.set_defaults(func=_cmd_score_batch_all)
+
+    p_stream = sub.add_parser(
+        "stream",
+        help="Consume events.raw from Kafka, score, and produce results.",
+    )
+    for a, kw in common:
+        p_stream.add_argument(*a, **kw)
+    p_stream.add_argument(
+        "--kafka-brokers",
+        default=os.environ.get("KAFKA_BROKERS", "localhost:9092"),
+        help="Comma-separated Kafka bootstrap servers (env: KAFKA_BROKERS)",
+    )
+    p_stream.add_argument(
+        "--consumer-topic",
+        default=os.environ.get("KAFKA_TOPIC_RAW", "events.raw"),
+    )
+    p_stream.add_argument(
+        "--producer-topic-enriched",
+        default=os.environ.get("KAFKA_TOPIC_ENRICHED", "events.enriched"),
+    )
+    p_stream.add_argument(
+        "--producer-topic-alerts",
+        default=os.environ.get("KAFKA_TOPIC_ALERTS", "alerts.critical"),
+    )
+    p_stream.add_argument(
+        "--consumer-group",
+        default=os.environ.get("KAFKA_GROUP", "ai-engine-scoring"),
+    )
+    p_stream.set_defaults(func=_cmd_stream)
 
     return parser
 

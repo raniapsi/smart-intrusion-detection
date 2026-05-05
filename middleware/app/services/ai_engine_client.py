@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import timezone
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -8,6 +9,9 @@ import httpx
 
 from app.core.config import settings
 from app.models.event import Event
+from app.services.kafka_producer import publisher as kafka_publisher
+
+logger = logging.getLogger(__name__)
 
 
 def to_unified_event(event: Event) -> dict[str, Any]:
@@ -39,15 +43,35 @@ def to_unified_event(event: Event) -> dict[str, Any]:
 
 
 async def forward_event_to_ai(event: Event) -> None:
-    """Best-effort forwarding; the middleware should keep accepting events."""
-    if not settings.AI_FORWARD_ENABLED:
-        return
+    """
+    Best-effort forwarding to the AI engine.
 
-    url = f"{settings.AI_ENGINE_URL.rstrip('/')}/api/ingest/events"
+    Two paths run in parallel when both are enabled:
+      - Kafka: publish on `events.raw` (canonical, README-conformant)
+      - HTTP : POST to /api/ingest/events (fallback, useful for tests)
+
+    Either path failing is logged but does NOT raise — losing one publish
+    must not cause the middleware to reject the originating event.
+    """
     payload = to_unified_event(event)
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        response = await client.post(url, json=payload)
-        response.raise_for_status()
+
+    # 1) Kafka — canonical path. Synchronous send (the kafka client
+    # buffers internally), so the latency cost is ~microseconds.
+    if settings.KAFKA_ENABLED:
+        try:
+            kafka_publisher.send_unified_event(payload)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("kafka publish failed for %s: %s", event.event_id, e)
+
+    # 2) HTTP fallback — only when explicitly enabled.
+    if settings.AI_FORWARD_ENABLED:
+        url = f"{settings.AI_ENGINE_URL.rstrip('/')}/api/ingest/events"
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.post(url, json=payload)
+                response.raise_for_status()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("http forward failed for %s: %s", event.event_id, e)
 
 
 def _stable_uuid(value: str):
