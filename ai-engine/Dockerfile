@@ -19,6 +19,8 @@ COPY evaluation ./evaluation
 COPY fusion ./fusion
 COPY scoring_service ./scoring_service
 COPY backend ./backend
+COPY features/output/baselines.json ./features/output/baselines.json
+COPY models/trained/isoforest.joblib ./models/trained/isoforest.joblib
 
 RUN pip install -e .
 
