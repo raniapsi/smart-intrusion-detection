@@ -13,8 +13,8 @@ Le périmètre Security & PQC couvre **4 grands blocs fonctionnels** :
 |------|-------------|
 | **Double Proxy** | Forward Proxy (côté Gateway) + Reverse Proxy (côté Middleware) avec terminaison PQC |
 | **Handshake TLS 1.3 hybride** | Échange de clés X25519MLKEM768 + Session Resumption PSK+DHE |
-| **Certificats & mTLS** | CA hybride, génération de certificats ECC-hybrid-MLDSA5, allowlist mTLS |
-| **Signature des logs** | Signature PQC des logs avec ECC-hybrid-MLDSA5 + stockage sécurisé des clés |
+| **Certificats & mTLS** | CA hybride, génération de certificats p384_mldsa65, allowlist mTLS |
+| **Signature des logs** | Signature PQC des logs avec p384_mldsa65 + stockage sécurisé des clés |
 
 La répartition sépare le **transport** (tunnel chiffré) de l'**identité** (certificats, authentification, signature).
 
@@ -71,19 +71,19 @@ Responsable de la **chaîne de confiance cryptographique** : génération des ce
 
 | # | Mission | Détail |
 |---|---------|--------|
-| 1 | **CA hybride (PKI-free)** | Génération du certificat racine et de la clé privée hybride ECC-hybrid-MLDSA5 avec `liboqs` + `oqs-python`. Pas de PKI externe : modèle allow-list. |
-| 2 | **Certificats Gateway & Middleware** | Génération des certificats d'identité pour le Gateway et le Middleware, signés par la CA hybride. Clés privées ECC-hybrid-MLDSA5. |
+| 1 | **CA hybride (PKI-free)** | Génération du certificat racine et de la clé privée hybride p384_mldsa65 avec `liboqs` + `oqs-python`. Pas de PKI externe : modèle allow-list. |
+| 2 | **Certificats Gateway & Middleware** | Génération des certificats d'identité pour le Gateway et le Middleware, signés par la CA hybride. Clés privées p384_mldsa65. |
 | 3 | **mTLS Allowlist** | Implémentation du mécanisme d'authentification mutuelle sans PKI : fichier `allowlist.json` listant les certificats autorisés. Validation croisée Gateway ↔ Middleware. |
 | 4 | **Stockage sécurisé des clés** | Chiffrement des fichiers `.pem` avec AES-256 + passphrase. Permissions 600. Script de provisioning au premier démarrage. |
-| 5 | **Signature PQC des logs** | Implémentation de `log_signer.py` : double signature ECC-hybrid-MLDSA5 (ECDSA P-384 ∥ ML-DSA-5) de chaque entrée de log. Vérification d'intégrité. |
-| 6 | **Choix du schéma de signature devices** | Décision technique : ECC-hybrid-MLDSA5 (cohérent avec les logs, plus lourd) vs. ML-DSA-65 (plus léger) pour les certificats devices. Justification documentée. |
+| 5 | **Signature PQC des logs** | Implémentation de `log_signer.py` : double signature p384_mldsa65 (ECDSA P-384 ∥ ML-DSA-65) de chaque entrée de log. Vérification d'intégrité. |
+| 6 | **Choix du schéma de signature devices** | Décision technique : p384_mldsa65 (cohérent avec les logs, plus lourd) vs. ML-DSA-65 (plus léger) pour les certificats devices. Justification documentée. |
 
 ### Fichiers sous responsabilité
 
 ```
 security/
 ├── ca/
-│   ├── ca.crt                ← Certificat racine (ECC-hybrid-MLDSA5)
+│   ├── ca.crt                ← Certificat racine (p384_mldsa65)
 │   └── ca.key                ← Clé privée racine (chiffrée AES-256)
 ├── gateway/
 │   ├── gateway.crt           ← Certificat d'identité Gateway
@@ -92,18 +92,18 @@ security/
 │   ├── middleware.crt        ← Certificat d'identité Middleware
 │   └── middleware.key        ← Clé privée hybride
 ├── allowlist.json            ← Liste des certificats autorisés (mTLS)
-├── log_signer.py             ← Signature ECC-hybrid-MLDSA5 des logs
+├── log_signer.py             ← Signature p384_mldsa65 des logs
 └── gen_certs.py              ← [NEW] Script de génération des certificats
 ```
 
 ### Livrables
 
-- [ ] CA hybride fonctionnelle (certificat racine + clé ECC-hybrid-MLDSA5)
+- [ ] CA hybride fonctionnelle (certificat racine + clé p384_mldsa65)
 - [ ] Certificats Gateway et Middleware générés et signés par la CA
 - [ ] Allowlist mTLS opérationnelle (authentification mutuelle validée)
 - [ ] Clés `.pem` chiffrées AES-256 avec provisioning automatique
 - [ ] `log_signer.py` : signature + vérification des logs fonctionnelles
-- [ ] Note technique sur le choix ML-DSA-5 vs. ML-DSA-65 pour les devices
+- [ ] Note technique sur le choix ML-DSA-65 vs. ML-DSA-65 pour les devices
 
 ---
 
@@ -114,7 +114,7 @@ security/
 | **Périmètre** | Transport & Tunnel | Identité & Intégrité |
 | **Charge** | 15% | 15% |
 | **Technos principales** | Nginx, OQS-provider, Docker Networks | liboqs, oqs-python, OpenSSL |
-| **Algorithme principal** | X25519MLKEM768 (KEM) | ECC-hybrid-MLDSA5 (Signature) |
+| **Algorithme principal** | X25519MLKEM768 (KEM) | p384_mldsa65 (Signature) |
 | **Focus** | Performance du tunnel, latence | Chaîne de confiance, non-répudiation |
 | **Nb de livrables** | 6 | 6 |
 

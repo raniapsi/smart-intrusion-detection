@@ -184,14 +184,14 @@ building/B1/network/alert                        ← network_agent (anomalies)
 ```
 security/
 ├── ca/
-│   ├── ca.crt                  ← certificat racine (hybride ECC-hybrid-MLDSA5)
+│   ├── ca.crt                  ← certificat racine (hybride p384_mldsa65)
 │   └── ca.key                  ← clé privée racine (hybride, chiffrée)
 ├── gateway/
 │   ├── gateway.crt             ← certificat d'identité du gateway logiciel
-│   └── gateway.key             ← clé privée hybride (ECC-hybrid-MLDSA5, perm. 600)
+│   └── gateway.key             ← clé privée hybride (p384_mldsa65, perm. 600)
 ├── middleware/
 │   ├── middleware.crt          ← certificat d'identité du middleware
-│   └── middleware.key          ← clé privée hybride (ECC-hybrid-MLDSA5)
+│   └── middleware.key          ← clé privée hybride (p384_mldsa65)
 └── allowlist.json              ← liste des certificats autorisés (mTLS sans PKI)
 ```
 
@@ -207,7 +207,7 @@ security/
 | Fonction              | Algorithme hybride retenu          | Détail                                                                 | Standard NIST       |
 |-----------------------|------------------------------------|------------------------------------------------------------------------|---------------------|
 | Échange de clés (KEM) | **X25519MLKEM768**                 | X25519 (ECDH classique) + ML-KEM-768 (Kyber niveau 3, 192-bit sec.)   | FIPS 203 + RFC 8422 |
-| Authentification / Signature | **ECC-hybrid-MLDSA5**      | ECDSA P-384 (classique) + ML-DSA niveau 5 (256-bit sec. équiv. AES-256) | FIPS 204            |
+| Authentification / Signature | **p384_mldsa65**      | ECDSA P-384 (classique) + ML-DSA-65 (niveau 3) (192-bit sec. équiv. AES-192) | FIPS 204            |
 | Hash / intégrité      | **SHA-3 / SHAKE-256**              | Résistant quantique nativement (construction sponge)                  | FIPS 202            |
 
 **Principe du tunnel hybride X25519MLKEM768 :**
@@ -233,19 +233,19 @@ Client (Gateway)                          Serveur (Middleware)
       │══ Session TLS 1.3 chiffrée (AES-256-GCM) ══════════│
 ```
 
-**Principe du hybride ECC-hybrid-MLDSA5 pour la signature :**
+**Principe du hybride p384_mldsa65 pour la signature :**
 
 ```
 Signature d'un log ou d'un certificat :
-  sig_final = (sig_ECDSA_P384 ║ sig_MLDSA5)
+  sig_final = (sig_ECDSA_P384 ║ sig_MLDSA65)
 
 Vérification :
-  valide si ET SEULEMENT SI sig_ECDSA_P384 ET sig_MLDSA5 sont tous les deux valides
+  valide si ET SEULEMENT SI sig_ECDSA_P384 ET sig_MLDSA65 sont tous les deux valides
   → double signature → sécurité maximale sur 15 ans face aux menaces quantiques
 ```
 
-**Choix de ML-DSA niveau 5 (ECC-hybrid-MLDSA5) :**
-ECC-hybrid-MLDSA5 offre le niveau de sécurité 5 (équivalent AES-256), le plus élevé du standard FIPS 204. Justifié ici car les logs signés doivent rester légalement incontestables sur une durée de 15 ans, pendant laquelle la puissance de calcul quantique évoluera de façon imprévisible.
+**Choix de ML-DSA-65 (niveau 3) (p384_mldsa65) :**
+p384_mldsa65 offre le niveau de sécurité 5 (équivalent AES-256), le plus élevé du standard FIPS 204. Justifié pour les certificats d'identité et la signature des logs : bon compromis entre protection PQC robuste et performance pratique. Compatible avec l'OQS provider sous l'identifiant p384_mldsa65 (hybride P-384 + ML-DSA-65).
 
 ### 4.2.4 Optimisation des performances : Session Resumption hybride (PSK+DHE)
 
@@ -262,10 +262,10 @@ Pour compenser l'overhead calculatoire et la taille des messages du handshake PQ
 
 ### 4.3 Protection des logs
 
-- **Logs inviolables :** chaque entrée est signée avec le hybride ECC-hybrid-MLDSA5 → toute modification est détectable, y compris par un adversaire quantique futur
+- **Logs inviolables :** chaque entrée est signée avec le hybride p384_mldsa65 → toute modification est détectable, y compris par un adversaire quantique futur
 - **Chiffrement des logs au repos :** avec la clé de session issue de X25519MLKEM768 → protégés contre le "harvest now, decrypt later"
 - **Horodatage qualifié :** timestamp signé par une TSA (Time Stamping Authority) pour valeur légale
-- **Durée de garantie : 15 ans** — justifiée par le choix ML-DSA niveau 5 (ECC-hybrid-MLDSA5)
+- **Durée de garantie : 15 ans** — justifiée par le choix ML-DSA-65 (niveau 3) (p384_mldsa65)
 
 ### 4.4 Architecture de Segmentation — Double Tunnel Proxy
 
@@ -565,7 +565,7 @@ WS   /ws/events                         (stream temps réel)
           → IA: profil alice = accès Z3 attendu 8h-18h, score physique = 0.05
           → Score réseau : trafic alice normal, score cyber = 0.03
           → Score final = 0.04 → NORMAL
-          → TimescaleDB: log signé (ECC-hybrid-MLDSA5)
+          → TimescaleDB: log signé (p384_mldsa65)
           → Dashboard: mise à jour statut zone Z3 (vert)
 ```
 
@@ -588,7 +588,7 @@ WS   /ws/events                         (stream temps réel)
           → Kafka topic alerts.critical
           → Notification SOC (SMS + dashboard rouge)
           → Action automatique possible: verrouillage porte B2, isolation VLAN caméra
-          → Log signé (ECC-hybrid-MLDSA5) archivé dans TimescaleDB
+          → Log signé (p384_mldsa65) archivé dans TimescaleDB
 ```
 
 ---
@@ -635,7 +635,7 @@ networks:
 | Simulation IoT   | Agents Python           | Python 3.12             | Génération d'événements (badges, portes…)   |
 | Protocoles       | Mosquitto 2.x           | C                       | Broker MQTT                                 |
 | Gateway          | Service Python asyncio  | Python 3.12             | Validation, buffer, publication MQTT        |
-| Sécurité TLS/PQC | OpenSSL 3.x + liboqs + oqs-python | Python 3.12 | TLS 1.3 + X25519MLKEM768 + ECC-hybrid-MLDSA5   |
+| Sécurité TLS/PQC | OpenSSL 3.x + liboqs + oqs-python | Python 3.12 | TLS 1.3 + X25519MLKEM768 + p384_mldsa65   |
 | Middleware       | Node-RED (self-hosted)  | Node.js 20              | Orchestration des flows IoT                 |
 | Streaming        | Apache Kafka            | JVM                     | File de messages inter-services             |
 | Stockage         | TimescaleDB             | PostgreSQL 16           | Séries temporelles + logs signés            |
@@ -706,10 +706,10 @@ Door ───────────┘                       ▲
 - [x] **Simulation vs matériel réel :** tout simulé sur PC  — simulateur Python multi-agents ✓
 - [x] **Déploiement :** Docker Compose sur PC unique (Windows/Mac) ✓
 - [ ] **Modèle IA :** Isolation Forest en v1 → LSTM en v2 si temps disponible
-- [ ] **Implémentation PQC :** `liboqs` + `oqs-python` — X25519MLKEM768 + ECC-hybrid-MLDSA5 → **périmètre Ryan & Rania**
+- [ ] **Implémentation PQC :** `liboqs` + `oqs-python` — X25519MLKEM768 + p384_mldsa65 → **périmètre Ryan & Rania**
 - [ ] **Stockage clés (simulation) :** fichiers `.pem` chiffrés AES-256 avec passphrase → à définir par Ryan & Rania
 - [ ] **GDPR :** simulation de métadonnées uniquement, pas de vidéo réelle — problème écarté ✓
-- [ ] **Signature des certs devices :** ECC-hybrid-MLDSA5 (cohérent avec les logs) ou ML-DSA-65 (plus léger) ? → à trancher par Ryan & Rania
+- [ ] **Signature des certs devices :** p384_mldsa65 (cohérent avec les logs) ou ML-DSA-65 (plus léger) ? → à trancher par Ryan & Rania
 
 ### Risques identifiés
 
@@ -742,7 +742,7 @@ iot-security/
 │   ├── middleware/               ← certificats & clés Middleware (hybride)
 │   ├── tls_client.py             ← client TLS (X25519MLKEM768)
 │   ├── tls_server.py             ← serveur TLS
-│   └── log_signer.py             ← signature ECC-hybrid-MLDSA5 des logs
+│   └── log_signer.py             ← signature p384_mldsa65 des logs
 ├── middleware/                    ← couche 5 : Node-RED flows
 │   └── flows/                    ← fichiers flows.json exportés Node-RED
 ├── ai-engine/                     ← couche 7 : moteur IA
