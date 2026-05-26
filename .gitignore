@@ -165,3 +165,6 @@ temp/
 *.d.ts
 HANDOFF_RANIA.md
 PRESENTATION_EQUIPE.md
+
+# Exception : middleware/.env.example est requis par le Dockerfile
+!middleware/.env.example
