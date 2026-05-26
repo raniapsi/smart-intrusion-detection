@@ -182,17 +182,27 @@ building/B1/network/alert                        ← network_agent (anomalies)
 
 **Key file structure (simulation):**
 ```
-security/
+security/                              ← PQC identity & signing (Rania's scope)
 ├── ca/
 │   ├── ca.crt                  ← root certificate (hybrid ECC-hybrid-MLDSA5)
-│   └── ca.key                  ← root private key (hybrid, encrypted)
+│   └── ca.key                  ← root private key (hybrid, encrypted AES-256)
 ├── gateway/
 │   ├── gateway.crt             ← software gateway identity certificate
 │   └── gateway.key             ← hybrid private key (ECC-hybrid-MLDSA5, perm. 600)
 ├── middleware/
 │   ├── middleware.crt          ← middleware identity certificate
 │   └── middleware.key          ← hybrid private key (ECC-hybrid-MLDSA5)
-└── allowlist.json              ← list of authorised certificates (mTLS without PKI)
+├── allowlist.json              ← list of authorised certificates (mTLS without PKI)
+├── gen_certs.py                ← certificate generation script (oqs-python)
+└── log_signer.py               ← ECC-hybrid-MLDSA5 log signing
+
+infra/                                 ← PQC tunnel (Ryan's scope)
+├── forward-proxy/
+│   ├── Dockerfile              ← Nginx build with OQS-provider
+│   └── nginx.conf              ← outgoing TLS/PQC config (X25519MLKEM768)
+└── reverse-proxy/
+    ├── Dockerfile
+    └── nginx.conf              ← PQC termination + mTLS verification
 ```
 
 **Mutual authentication flow (unchanged vs production):**
@@ -251,14 +261,14 @@ ECC-hybrid-MLDSA5 provides security level 5 (equivalent to AES-256), the highest
 
 To offset the computational overhead and message size of the full PQC handshake (ML-KEM-768), the system implements the **TLS 1.3 Session Resumption** mechanism in hybrid mode:
 *   **Initial (Full) Handshake**: Full key exchange **X25519 + ML-KEM-768**. After mutual authentication, a session ticket (PSK - Pre-Shared Key) is generated.
-*   **Reconnections (Resumption)**: Use of the **PSK** combined with an ephemeral **DHE exchange (X25519)**.
+*   **Reconnections (Resumption)**: Use of the **PSK** combined with an ephemeral **DHE exchange (X25519MLKEM768)**.
 
 > [!IMPORTANT]
-> **Quantum resistance inheritance**: Session resumption does not lose its PQC security. The PSK used during resumption is directly derived from the shared secret established via ML-KEM-768 during the initial handshake. Even if the ephemeral exchange of the reconnection is classical only (X25519), the global secret remains protected by the quantum entropy of the "parent" PSK.
+> **Quantum resistance inheritance**: Session resumption does not lose its PQC security. The PSK used during resumption is directly derived from the shared secret established via ML-KEM-768 during the initial handshake. The ephemeral exchange during reconnection also uses the hybrid algorithm (X25519MLKEM768), ensuring end-to-end quantum security and robust Perfect Forward Secrecy.
 
 **Benefits:**
 - **Performance**: 90% reduction in PQC overhead on reconnections.
-- **Perfect Forward Secrecy (PFS)**: Adding the X25519 exchange on each reconnection ensures that the physical theft of a session ticket does not allow past or future sessions to be decrypted.
+- **Perfect Forward Secrecy (PFS)**: Adding the X25519MLKEM768 exchange on each reconnection ensures that the physical theft of a session ticket does not allow past or future sessions to be decrypted.
 
 ### 4.3 Log protection
 
@@ -612,8 +622,10 @@ WS   /ws/events                         (real-time stream)
 # docker-compose.yml — simplified view
 services:
   simulator:        # Python agents (badge, door, motion, network)
+  gateway:          # Python gateway service (validation, buffering)
+  forward-proxy:    # Nginx/OQS — outgoing PQC tunnel (Gateway side)
+  reverse-proxy:    # Nginx/OQS — incoming PQC termination (Middleware side)
   mosquitto:        # MQTT Broker
-  gateway:          # Python gateway service (validation, TLS)
   nodered:          # Middleware / flow orchestration
   zookeeper:        # Required by Kafka
   kafka:            # Event streaming
@@ -625,7 +637,9 @@ services:
   prometheus:       # Metrics collection
 
 networks:
-  iot-net:          # Internal Docker network (isolated)
+  iot-net:            # IoT perimeter (internal: true) — simulator, gateway, forward-proxy
+  pqc-transit-net:    # PQC tunnel segment — forward-proxy ↔ reverse-proxy only
+  middleware-net:     # Middleware perimeter (internal: true) — reverse-proxy, mosquitto, nodered, kafka…
 ```
 
 ### Stack per layer
@@ -634,8 +648,9 @@ networks:
 |------------------|-------------------------|-------------------------|---------------------------------------------|
 | IoT Simulation   | Python agents           | Python 3.12             | Event generation (badges, doors…)           |
 | Protocols        | Mosquitto 2.x           | C                       | MQTT Broker                                 |
-| Gateway          | Python asyncio service  | Python 3.12             | Validation, buffer, MQTT publication        |
-| TLS/PQC Security | OpenSSL 3.x + liboqs + oqs-python | Python 3.12 | TLS 1.3 + X25519MLKEM768 + ECC-hybrid-MLDSA5   |
+| Gateway          | Python asyncio service  | Python 3.12             | Validation, buffer, MQTT publication (no TLS — delegated to forward-proxy) |
+| TLS/PQC Tunnel   | Nginx + OQS-provider (OpenSSL 3.x + liboqs) | Nginx / C | Forward & Reverse Proxy — TLS 1.3 + X25519MLKEM768 |
+| PQC Identity     | oqs-python + liboqs     | Python 3.12             | Certificate generation (ECC-hybrid-MLDSA5), log signing |
 | Middleware       | Node-RED (self-hosted)  | Node.js 20              | IoT flow orchestration                      |
 | Streaming        | Apache Kafka            | JVM                     | Inter-service message queue                 |
 | Storage          | TimescaleDB             | PostgreSQL 16           | Time series + signed logs                   |
@@ -736,12 +751,12 @@ iot-security/
 │   └── main.py                   ← simulator orchestrator
 ├── gateway/                       ← layer 3: software gateway
 │   └── gateway.py                ← validation, buffer, MQTT publication
-├── security/                      ← layer 4: TLS/PQC — Ryan & Rania's scope
-│   ├── ca/                       ← root authority (hybrid)
+├── security/                      ← layer 4: PQC identity & signing — Rania's scope
+│   ├── ca/                       ← root authority (hybrid ECC-hybrid-MLDSA5)
 │   ├── gateway/                  ← Gateway certificates & keys (hybrid)
 │   ├── middleware/               ← Middleware certificates & keys (hybrid)
-│   ├── tls_client.py             ← TLS client (X25519MLKEM768)
-│   ├── tls_server.py             ← TLS server
+│   ├── allowlist.json            ← list of authorised certificates (mTLS without PKI)
+│   ├── gen_certs.py              ← certificate generation script (oqs-python)
 │   └── log_signer.py             ← ECC-hybrid-MLDSA5 log signing
 ├── middleware/                    ← layer 5: Node-RED flows
 │   └── flows/                    ← exported Node-RED flows.json files
@@ -755,6 +770,12 @@ iot-security/
 │   └── src/
 ├── infra/
 │   ├── docker-compose.yml        ← orchestrates all services
+│   ├── forward-proxy/            ← layer 4: PQC tunnel outgoing — Ryan's scope
+│   │   ├── Dockerfile            ← Nginx build with OQS-provider
+│   │   └── nginx.conf            ← TLS/PQC config (X25519MLKEM768)
+│   ├── reverse-proxy/            ← layer 4: PQC tunnel incoming — Ryan's scope
+│   │   ├── Dockerfile
+│   │   └── nginx.conf            ← PQC termination + mTLS verification
 │   ├── mosquitto/
 │   │   └── mosquitto.conf
 │   ├── kafka/
@@ -792,4 +813,4 @@ An estimated breakdown of development time by major technical area:
 
 ---
 
-*Document last updated on 25/04/2026 — Validated by the team.*
+*Document last updated on 26/04/2026 — Validated by the team.*

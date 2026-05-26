@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  forward-proxy:
+    image: openquantumsafe/nginx:latest
+    container_name: forward-proxy-edge
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+    volumes:
+      - ./forward-proxy/nginx.conf:/opt/nginx/nginx-conf/nginx.conf:ro
+      - ../security/ca/ca.crt:/etc/nginx/certs/ca.crt:ro
+      - ../security/gateway/gateway.crt:/etc/nginx/certs/gateway.crt:ro
+      - ../security/gateway/gateway.key:/etc/nginx/certs/gateway.key:ro
+    networks:
+      - iot-net
+      - internet-net
+
+networks:
+  iot-net:
+    internal: true
+  internet-net:
+    driver: bridge

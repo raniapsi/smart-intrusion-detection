@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "updated_at": "2026-04-22T21:47:18.281404+00:00",
+  "ca_fingerprint": "e859e90dce5a9eb790517c598b9da0db9e2d627ee722534400d9ae8fd3fb6115",
+  "entries": [
+    {
+      "entity_id": "ca-root",
+      "entity_type": "CA",
+      "fingerprint": "e859e90dce5a9eb790517c598b9da0db9e2d627ee722534400d9ae8fd3fb6115",
+      "added_at": "2026-04-22T21:47:18.279009+00:00",
+      "expires_at": "2036-04-19T21:47:18.266852+00:00",
+      "revoked": false,
+      "comment": "CA racine auto-inscrite"
+    },
+    {
+      "entity_id": "gateway-b1",
+      "entity_type": "GATEWAY",
+      "fingerprint": "fe923f4494570b72c5857e945776f53f58ed4004f04a6e5af461806e81c51237",
+      "added_at": "2026-04-22T21:47:18.280214+00:00",
+      "expires_at": "2027-04-22T21:47:18.271045+00:00",
+      "revoked": false,
+      "comment": "Gateway b\u00e2timent B1 \u2014 zone capteurs"
+    },
+    {
+      "entity_id": "middleware",
+      "entity_type": "MIDDLEWARE",
+      "fingerprint": "e6a232389f481e18201793cb8ace05885ff30008e70cfb259ad6a41fcbb42ad0",
+      "added_at": "2026-04-22T21:47:18.281396+00:00",
+      "expires_at": "2027-04-22T21:47:18.274309+00:00",
+      "revoked": false,
+      "comment": "Middleware \u2014 normalisation & Kafka"
+    }
+  ]
+}

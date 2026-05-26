@@ -48,3 +48,6 @@ node_modules/
 .pytest_cache/
 htmlcov/
 .coverage
+
+HANDOFF_RANIA.md
+PRESENTATION_EQUIPE.md
