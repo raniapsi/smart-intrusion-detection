@@ -273,3 +273,90 @@ Client (null) received CONNACK (0)
 > [!TIP]
 > Si vous voyez le code HTTP **101** dans les logs du proxy, cela confirme techniquement que l'encapsulation WebSocket a réussi, permettant au protocole MQTT de circuler à l'intérieur du tunnel PQC.
 
+### 7.3. Vérification de bout en bout (Simulateur IoT vers Oracle)
+
+En plus du script de test manuel, vous pouvez vérifier le flux persistant généré par le **simulateur IoT** enfermé dans le réseau isolé `iot-net`.
+
+#### Sur la machine locale (Mac) :
+1. **Démarrer le simulateur IoT** :
+   Assurez-vous que le service qui génère les logs est bien en cours d'exécution dans son conteneur isolé :
+   ```bash
+   docker compose up -d iot-simulator
+   ```
+
+2. **Vérifier les connexions TCP actives (Sockets)** :
+   Afin de prouver la liaison entre le simulateur et le proxy local, puis vers Internet :
+   ```bash
+   docker exec forward-proxy-edge netstat -anp | grep ESTABLISHED
+   ```
+   **Résultat attendu :**
+   ```text
+   tcp 0 0 192.168.107.2:9001      192.168.107.3:53689     ESTABLISHED
+   tcp 0 0 192.168.117.2:60398     145.241.162.174:8443    ESTABLISHED
+   ```
+   *La première ligne prouve la réception interne depuis le simulateur. La seconde prouve l'ouverture du tunnel PQC sortant vers le cloud.*
+
+3. **Vérifier les logs du proxy local (Comportement Nginx)** :
+   Nginx possède une particularité technique : il n'écrit les logs de trafic (`access.log`) **qu'à la fin d'une connexion** afin d'y inclure le volume transféré. Comme le tunnel WebSocket est persistant et très stable, aucun log HTTP n'apparaît tant que la connexion est active.
+   
+   Pour forcer l'affichage du log et prouver que la donnée a transité :
+   1. Dans un terminal, affichez les logs du proxy en direct :
+      ```bash
+      docker logs -f forward-proxy-edge
+      ```
+   2. Dans un autre terminal, **éteignez le simulateur** pour couper intentionnellement la connexion :
+      ```bash
+      docker compose stop iot-simulator
+      ```
+   3. **Résultat attendu :** La ligne de statut `101 Switching Protocols` s'affichera instantanément dans le proxy avec le total d'octets JSON envoyés :
+      ```text
+      192.168.107.4 - - [27/May/2026:22:49:40 +0000] "GET /mqtt HTTP/1.1" 101 4503 "-" "-"
+      ```
+   4. **Relancez le simulateur** immédiatement après pour ré-ouvrir le tunnel et continuer vos tests :
+      ```bash
+      docker compose start iot-simulator
+      ```
+
+#### Sur la VM Oracle :
+Pour prouver la réception du paquet après son voyage chiffré sur Internet :
+1. **Logs du Proxy Cloud :**
+   ```bash
+   sudo docker logs reverse-proxy-cloud --tail 10
+   ```
+   *Vous verrez l'IP publique de votre réseau local avec la réponse `101`.*
+
+2. **Preuve de la sécurité face aux scanners d'Internet :**
+   Dans ces mêmes logs Cloud, vous observerez régulièrement des tentatives d'attaque rejetées par le PQC :
+   ```text
+   SSL_do_handshake() failed (SSL: error:0A000065:SSL routines::no suitable key share) while SSL handshaking, client: 54.227.126.11
+   ```
+   *Ceci démontre l'invulnérabilité du port 8443 face aux bots classiques n'implémentant pas les algorithmes Post-Quantiques de Cloudflare (OQS).*
+
+3. **Audit du Payload JSON (Écoute WebSocket en direct) :**
+   Afin de prouver que les messages atteignent bien leur destination finale, nous allons brancher un script Python d'écoute directement sur le Broker Mosquitto interne de la VM.
+   
+   > [!IMPORTANT]
+   > Le Broker `mosquitto-cloud` est configuré de façon ultra-sécurisée : il **n'écoute pas** sur le port standard TCP 1883. Il n'accepte que des connexions **WebSocket sur le port 9001**.
+   
+   Pour intercepter les données, exécutez ce script depuis le terminal de votre VM Oracle :
+   ```bash
+   # Récupération dynamique de l'IP du Broker isolé
+   IP=$(sudo docker inspect mosquitto-cloud -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
+   
+   # Lancement du client d'écoute Paho-MQTT en WebSocket
+   python3 -c "
+   import paho.mqtt.subscribe as subscribe
+   print('🎧 En écoute de Mosquitto (WebSocket) sur son IP privée ($IP:9001)...')
+   def print_msg(client, userdata, message):
+       print(f'📦 Alerte reçue : {message.payload.decode()}')
+   subscribe.callback(print_msg, 'events.raw', hostname='$IP', port=9001, transport='websockets')
+   "
+   ```
+   
+   **Résultat attendu :**
+   Vous verrez apparaître en temps réel le flux JSON des capteurs généré par le simulateur Mac :
+   ```text
+   🎧 En écoute de Mosquitto (WebSocket) sur son IP privée (172.18.0.2:9001)...
+   📦 Alerte reçue : {"event_id": "evt-47eb1376", "event_type": "door_sensor", "location": "zone-A", "details": {"state": "open"}}
+   ```
+

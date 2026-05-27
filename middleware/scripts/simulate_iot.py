@@ -5,10 +5,16 @@ Usage: python -m scripts.simulate_iot
 """
 
 import json
+import os
 import random
 import time
 import uuid
+import paho.mqtt.client as mqtt
 from datetime import datetime, timezone
+
+MQTT_BROKER_HOST = os.getenv("MQTT_BROKER_HOST", "localhost")
+MQTT_BROKER_PORT = int(os.getenv("MQTT_BROKER_PORT", "9001"))
+MQTT_TOPIC = os.getenv("MQTT_TOPIC", "events.raw")
 
 
 DEVICE_TYPES = [
@@ -74,13 +80,25 @@ def generate_event() -> dict:
 
 if __name__ == "__main__":
     print("=== IoT Device Simulator ===")
-    print("Generating sample events (Ctrl+C to stop)\n")
+    print(f"Connecting to MQTT {MQTT_BROKER_HOST}:{MQTT_BROKER_PORT} over WebSockets...")
+
+    client = mqtt.Client(transport="websockets")
+    try:
+        client.connect(MQTT_BROKER_HOST, MQTT_BROKER_PORT, 60)
+        client.loop_start()
+        print("Connected! Generating sample events (Ctrl+C to stop)\n")
+    except Exception as e:
+        print(f"Failed to connect to MQTT broker: {e}")
+        exit(1)
 
     try:
         while True:
             event = generate_event()
-            print(json.dumps(event, indent=2))
-            print("---")
+            payload = json.dumps(event)
+            client.publish(MQTT_TOPIC, payload)
+            print(f"Published to {MQTT_TOPIC}: {event['event_id']}")
             time.sleep(random.uniform(1.0, 3.0))
     except KeyboardInterrupt:
         print("\nSimulator stopped.")
+        client.loop_stop()
+        client.disconnect()

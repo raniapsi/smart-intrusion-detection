@@ -1,0 +1,250 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: smart-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      KAFKA_OPTS: -Dzookeeper.4lw.commands.whitelist=ruok,srvr,stat
+    healthcheck:
+      test:
+      - CMD
+      - cub
+      - zk-ready
+      - localhost:2181
+      - '10'
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+    - middleware-net
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: smart-kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    ports:
+    - 9092:9092
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+    healthcheck:
+      test:
+      - CMD
+      - cub
+      - kafka-ready
+      - -b
+      - localhost:9092
+      - '1'
+      - '10'
+      interval: 10s
+      timeout: 15s
+      retries: 12
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+    - middleware-net
+  kafka-init:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: smart-kafka-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint:
+    - /bin/bash
+    - -c
+    command:
+    - "set -e\necho 'creating Kafka topics...'\nkafka-topics --bootstrap-server kafka:9092\
+      \ --create --if-not-exists \\\n  --topic events.raw --partitions 3 --replication-factor\
+      \ 1 \\\n  --config retention.ms=604800000\n\nkafka-topics --bootstrap-server\
+      \ kafka:9092 --create --if-not-exists \\\n  --topic events.enriched --partitions\
+      \ 3 --replication-factor 1 \\\n  --config retention.ms=2592000000\n\nkafka-topics\
+      \ --bootstrap-server kafka:9092 --create --if-not-exists \\\n  --topic alerts.critical\
+      \ --partitions 1 --replication-factor 1 \\\n  --config retention.ms=7776000000\n\
+      \nkafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \\\n \
+      \ --topic logs.signed --partitions 1 --replication-factor 1 \\\n  --config retention.ms=473040000000\n\
+      \necho 'topics:' && kafka-topics --bootstrap-server kafka:9092 --list\n"
+    restart: 'no'
+    networks:
+    - middleware-net
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: smart-mosquitto
+    volumes:
+    - ./mosquitto/config:/mosquitto/config:ro
+    restart: unless-stopped
+    networks:
+    - middleware-net
+  nodered:
+    build:
+      context: ./nodered
+    container_name: smart-nodered
+    ports:
+    - 127.0.0.1:1880:1880
+    environment:
+      NR_KAFKA_BROKERS: kafka:9092
+      TZ: Europe/Paris
+    volumes:
+    - ./nodered/flows.json:/data/flows.json
+    depends_on:
+      mosquitto:
+        condition: service_started
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    networks:
+    - middleware-net
+  ai-backend:
+    build:
+      context: ./ai-engine
+    container_name: smart-ai-backend
+    ports:
+    - 127.0.0.1:8000:8000
+    environment:
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_RAW: events.raw
+      KAFKA_TOPIC_ENRICHED: events.enriched
+      KAFKA_TOPIC_ALERTS: alerts.critical
+      KAFKA_GROUP: ai-engine-scoring
+    command:
+    - python
+    - -m
+    - backend.cli
+    - serve
+    - --topology
+    - dataset/topology/building_b1.yaml
+    - --baselines
+    - features/output/baselines.json
+    - --model
+    - models/trained/isoforest.joblib
+    - --kafka-brokers
+    - kafka:9092
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8000'
+    - --no-replay
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/score/current',
+        timeout=5)
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 25s
+    restart: unless-stopped
+    networks:
+    - middleware-net
+  middleware:
+    build:
+      context: ./middleware
+    container_name: smart-middleware
+    ports:
+    - 127.0.0.1:8010:8010
+    environment:
+      APP_NAME: smart-intrusion-detection
+      APP_ENV: development
+      DEBUG: 'true'
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_PORT: '8010'
+      AI_ENGINE_URL: http://ai-backend:8000
+      AI_FORWARD_ENABLED: 'true'
+      KAFKA_ENABLED: 'true'
+      KAFKA_BROKERS: kafka:9092
+      KAFKA_TOPIC_RAW: events.raw
+      BUILDING_ID: B1
+      MQTT_BROKER_HOST: mosquitto
+      MQTT_BROKER_PORT: '1883'
+      DATABASE_URL: postgresql://user:password@timescaledb:5432/intrusion_db
+      RISK_THRESHOLD_SUSPECT: '50'
+      RISK_THRESHOLD_CRITICAL: '80'
+    depends_on:
+      ai-backend:
+        condition: service_healthy
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -c
+      - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/api/health',
+        timeout=5)
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+    - middleware-net
+  frontend:
+    build:
+      context: ./ai-engine/frontend
+    container_name: smart-dashboard
+    ports:
+    - 127.0.0.1:5173:5173
+    environment:
+      VITE_API_PROXY_TARGET: http://ai-backend:8000
+      VITE_WS_PROXY_TARGET: ws://ai-backend:8000
+    depends_on:
+      ai-backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+    - middleware-net
+  alert-sender:
+    build:
+      context: ./middleware
+    container_name: smart-alert-sender
+    profiles:
+    - alerts
+    command:
+    - python
+    - scripts/auto_alerts.py
+    - --url
+    - http://middleware:8010/api/events
+    - --interval
+    - ${ALERT_INTERVAL:-5}
+    - --jitter
+    - ${ALERT_JITTER:-1}
+    depends_on:
+      middleware:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+    - middleware-net
+  reverse-proxy:
+    image: openquantumsafe/nginx:latest
+    container_name: reverse-proxy-cloud
+    restart: unless-stopped
+    ports:
+    - 8443:8443
+    volumes:
+    - ./infra/reverse-proxy/nginx.conf:/opt/nginx/nginx-conf/nginx.conf:ro
+    - ./security/ca/ca.crt:/etc/nginx/certs/ca.crt:ro
+    - ./security/middleware/middleware.crt:/etc/nginx/certs/middleware.crt:ro
+    - ./security/middleware/middleware.key:/etc/nginx/certs/middleware.key:ro
+    depends_on:
+    - mosquitto
+    networks:
+    - internet
+    - middleware-net
+networks:
+  internet: {}
+  middleware-net:
+    internal: true

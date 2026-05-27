@@ -1,0 +1,35 @@
+services:
+  forward-proxy:
+    image: openquantumsafe/nginx:latest
+    container_name: forward-proxy-edge
+    restart: unless-stopped
+    ports:
+      - "9001:9001"
+    volumes:
+      - ./infra/forward-proxy/nginx.conf:/opt/nginx/nginx-conf/nginx.conf:ro
+      - ./security/ca/ca.crt:/etc/nginx/certs/ca.crt:ro
+      - ./security/gateway/gateway.crt:/etc/nginx/certs/gateway.crt:ro
+      - ./security/gateway/gateway.key:/etc/nginx/certs/gateway.key:ro
+    networks:
+      - iot-net
+      - internet-net
+
+  iot-simulator:
+    build:
+      context: ./middleware
+    container_name: smart-iot-simulator
+    command: ["python", "scripts/simulate_iot.py"]
+    networks:
+      - iot-net
+    environment:
+      MQTT_BROKER_HOST: forward-proxy-edge
+      MQTT_BROKER_PORT: "9001"
+      MQTT_TOPIC: events.raw
+    restart: unless-stopped
+
+networks:
+  iot-net:
+    name: iot-net
+    internal: true
+  internet-net:
+    driver: bridge
