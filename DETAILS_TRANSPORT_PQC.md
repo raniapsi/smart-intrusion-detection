@@ -163,10 +163,10 @@ docker run --rm -v $(pwd)/../security:/certs openquantumsafe/curl \
 ```text
 * TLSv1.3 (OUT), TLS handshake, Client hello (1):
 ...
-* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519MLKEM768 / id-ecPublicKey
+* SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519MLKEM768 / p384_mldsa65
 * ALPN: server accepted http/1.1
 ```
-*Note : Cette commande prouve de façon claire et lisible que la connexion s'est bien établie en utilisant la courbe hybride `X25519MLKEM768` en combinaison avec les certificats.*
+*Note : Cette commande prouve de façon claire et lisible que la connexion s'est bien établie en utilisant l'échange de clés hybride `X25519MLKEM768` en combinaison avec les certificats hybride `p384_mldsa65`.*
 
 ### 6.5. Audit Cryptographique Profond (Trace OpenSSL)
 Pour auditer le contenu brut des paquets TLS 1.3 et prouver la Perfect Forward Secrecy, nous utilisons un stratagème en deux étapes pour forcer OpenSSL à enregistrer le ticket, puis à filtrer l'affichage massif avec `grep` pour extraire exactement les blocs qui nous intéressent.
