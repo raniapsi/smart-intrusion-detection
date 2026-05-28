@@ -30,7 +30,7 @@ DEVICE_TYPES = [
     {
         "event_type": "door_sensor",
         "source_device": "door-sensor-01",
-        "location": "zone-A",
+        "location": "Z1",
         "details_fn": lambda: {
             "state": random.choice(["open", "closed"]),
         },
@@ -38,7 +38,7 @@ DEVICE_TYPES = [
     {
         "event_type": "motion_detected",
         "source_device": "motion-sensor-01",
-        "location": "zone-B",
+        "location": "Z3",
         "details_fn": lambda: {
             "confidence": round(random.uniform(0.5, 1.0), 2),
         },
@@ -46,7 +46,7 @@ DEVICE_TYPES = [
     {
         "event_type": "network_anomaly",
         "source_device": "ids-probe-01",
-        "location": "server-room",
+        "location": "Z8",
         "details_fn": lambda: {
             "src_ip": f"192.168.1.{random.randint(1, 254)}",
             "dst_port": random.choice([22, 443, 8080, 3389]),
@@ -56,7 +56,7 @@ DEVICE_TYPES = [
     {
         "event_type": "iot_traffic",
         "source_device": f"iot-device-{random.randint(1, 10):02d}",
-        "location": "zone-C",
+        "location": "Z5",
         "details_fn": lambda: {
             "bytes_sent": random.randint(500, 50000),
             "protocol": random.choice(["MQTT", "HTTP", "CoAP", "unknown"]),
