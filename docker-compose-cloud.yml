@@ -105,6 +105,7 @@ services:
     restart: unless-stopped
     networks:
     - middleware-net
+    - internet
   ai-backend:
     build:
       context: ./ai-engine
@@ -152,6 +153,7 @@ services:
     restart: unless-stopped
     networks:
     - middleware-net
+    - internet
   middleware:
     build:
       context: ./middleware
@@ -192,6 +194,7 @@ services:
     restart: unless-stopped
     networks:
     - middleware-net
+    - internet
   frontend:
     build:
       context: ./ai-engine/frontend
@@ -207,6 +210,7 @@ services:
     restart: unless-stopped
     networks:
     - middleware-net
+    - internet
   alert-sender:
     build:
       context: ./middleware
