@@ -94,9 +94,27 @@ if __name__ == "__main__":
     try:
         while True:
             event = generate_event()
+            
+            # Map event to Node-RED topic
+            topic = "building/B1/network/flow"
+            etype = event["event_type"]
+            loc = event["location"]
+            dev = event["source_device"]
+            
+            if etype == "badge_access":
+                topic = f"building/B1/zone/{loc}/badge/{dev}"
+            elif etype == "door_sensor":
+                topic = f"building/B1/zone/{loc}/door/{dev}"
+            elif etype == "motion_detected":
+                topic = f"building/B1/zone/{loc}/motion/{dev}"
+            elif etype == "network_anomaly":
+                topic = "building/B1/network/alert"
+            elif etype == "iot_traffic":
+                topic = "building/B1/network/flow"
+            
             payload = json.dumps(event)
-            client.publish(MQTT_TOPIC, payload)
-            print(f"Published to {MQTT_TOPIC}: {event['event_id']}")
+            client.publish(topic, payload)
+            print(f"Published to {topic}: {event['event_id']}")
             time.sleep(random.uniform(1.0, 3.0))
     except KeyboardInterrupt:
         print("\nSimulator stopped.")
