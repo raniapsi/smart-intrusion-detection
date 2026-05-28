@@ -281,7 +281,7 @@ En plus du script de test manuel, vous pouvez vérifier le flux persistant gén�
 1. **Démarrer le simulateur IoT** :
    Assurez-vous que le service qui génère les logs est bien en cours d'exécution dans son conteneur isolé :
    ```bash
-   docker compose up -d iot-simulator
+   docker compose -f docker-compose-edge.yml up -d iot-simulator
    ```
 
 2. **Vérifier les connexions TCP actives (Sockets)** :
@@ -306,7 +306,7 @@ En plus du script de test manuel, vous pouvez vérifier le flux persistant gén�
       ```
    2. Dans un autre terminal, **éteignez le simulateur** pour couper intentionnellement la connexion :
       ```bash
-      docker compose stop iot-simulator
+      docker compose -f docker-compose-edge.yml stop iot-simulator
       ```
    3. **Résultat attendu :** La ligne de statut `101 Switching Protocols` s'affichera instantanément dans le proxy avec le total d'octets JSON envoyés :
       ```text
@@ -314,7 +314,7 @@ En plus du script de test manuel, vous pouvez vérifier le flux persistant gén�
       ```
    4. **Relancez le simulateur** immédiatement après pour ré-ouvrir le tunnel et continuer vos tests :
       ```bash
-      docker compose start iot-simulator
+      docker compose -f docker-compose-edge.yml start iot-simulator
       ```
 
 #### Sur la VM Oracle :
@@ -338,25 +338,68 @@ Pour prouver la réception du paquet après son voyage chiffré sur Internet :
    > [!IMPORTANT]
    > Le Broker `mosquitto-cloud` est configuré de façon ultra-sécurisée : il **n'écoute pas** sur le port standard TCP 1883. Il n'accepte que des connexions **WebSocket sur le port 9001**.
    
-   Pour intercepter les données, exécutez ce script depuis le terminal de votre VM Oracle :
+   Pour intercepter les données sans installer de librairie sur la machine, nous allons lancer le script d'écoute directement depuis l'intérieur du conteneur `smart-middleware` (qui possède déjà les librairies MQTT et un accès réseau direct au broker) :
    ```bash
-   # Récupération dynamique de l'IP du Broker isolé
-   IP=$(sudo docker inspect mosquitto-cloud -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')
-   
-   # Lancement du client d'écoute Paho-MQTT en WebSocket
-   python3 -c "
+   sudo docker exec -it smart-middleware python -c "
    import paho.mqtt.subscribe as subscribe
-   print('🎧 En écoute de Mosquitto (WebSocket) sur son IP privée ($IP:9001)...')
+   print('🎧 En écoute de Mosquitto (WebSocket) sur mosquitto:9001...')
    def print_msg(client, userdata, message):
-       print(f'📦 Alerte reçue : {message.payload.decode()}')
-   subscribe.callback(print_msg, 'events.raw', hostname='$IP', port=9001, transport='websockets')
+       print(f'📦 Alerte reçue sur {message.topic} : {message.payload.decode()}')
+   subscribe.callback(print_msg, 'building/#', hostname='mosquitto', port=9001, transport='websockets')
    "
    ```
    
    **Résultat attendu :**
    Vous verrez apparaître en temps réel le flux JSON des capteurs généré par le simulateur Mac :
    ```text
-   🎧 En écoute de Mosquitto (WebSocket) sur son IP privée (172.18.0.2:9001)...
-   📦 Alerte reçue : {"event_id": "evt-47eb1376", "event_type": "door_sensor", "location": "zone-A", "details": {"state": "open"}}
+   🎧 En écoute de Mosquitto (WebSocket) sur mosquitto:9001...
+   📦 Alerte reçue sur building/B1/zone/Z1/door/door-sensor-01 : {"event_id": "evt-47eb1376", "event_type": "door_sensor", "location": "Z1", "details": {"state": "open"}}
    ```
+
+---
+
+## 8. Traçabilité de Bout-en-Bout : Suivre un paquet à travers les couches
+
+Afin de vérifier que l'architecture Zero-Trust et le pipeline de données fonctionnent parfaitement de bout en bout, voici comment suivre un événement depuis sa génération sur le Edge jusqu'à son affichage sur le Dashboard.
+
+### Couche 1 : Edge (Mac) - Génération de l'événement
+Le script Python génère un événement MQTT (ex: ouverture de porte) et l'envoie au Forward Proxy local :
+```bash
+docker logs --tail 10 smart-iot-simulator
+# Résultat : Published to building/B1/zone/Z1/door/door-sensor-01: evt-8a4cd363
+```
+
+### Couche 2 : Transport PQC (Mac ➡️ Oracle VM)
+Le Forward Proxy chiffre le paquet avec Kyber (X25519MLKEM768) et l'envoie via Internet au Reverse Proxy.
+Pour observer le trafic entrant chiffré sur la VM Oracle :
+```bash
+sudo docker logs --tail 10 reverse-proxy-cloud
+# Résultat attendu (le code "101" confirme l'établissement du WebSocket PQC) : 
+# ... "GET /mqtt HTTP/1.1" 101 ...
+```
+
+### Couche 3 : Broker MQTT (Oracle VM)
+Le Reverse Proxy déchiffre la donnée et la transmet au broker Mosquitto en clair sur le réseau interne Docker :
+```bash
+# Mosquitto est silencieux par défaut, mais Node-RED y est connecté
+sudo docker logs --tail 20 smart-nodered
+# Résultat : [mqtt-broker:mosquitto] Connected to broker: nodered-middleware@mqtt://mosquitto:1883
+```
+
+### Couche 4 : Normalisation Node-RED (Oracle VM)
+Node-RED capte le sujet MQTT hiérarchique (`building/B1/zone/Z1/...`), le parse, convertit le JSON au format **Unified Event Schema**, et l'injecte dans le topic Kafka `events.raw`.
+
+### Couche 5 : Bus Kafka (Oracle VM)
+Kafka agit comme un buffer distribué à haute performance. L'événement est stocké dans la partition `events.raw`.
+
+### Couche 6 : AI Engine & Scoring (Oracle VM)
+Le backend IA, codé en FastAPI, consomme le message Kafka en temps réel, évalue son score de menace (Isolation Forest), et le sauvegarde dans TimescaleDB/PostgreSQL :
+```bash
+sudo docker logs --tail 10 smart-ai-backend | grep -i "kafka stream processed"
+# Résultat : INFO scoring_service.stream: kafka stream processed 100 events
+```
+
+### Couche 7 : WebSockets & Dashboard (Oracle VM ➡️ Mac)
+L'IA pousse instantanément l'événement scoré vers le Dashboard React via un tunnel WebSocket. L'événement apparaît alors dans le composant "LIVE EVENT STREAM" ou dans les "ACTIVE ALERTS" si son score de menace est jugé "Suspect" ou "Critique".
+
 

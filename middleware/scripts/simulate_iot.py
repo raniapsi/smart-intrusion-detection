@@ -74,6 +74,7 @@ def generate_event() -> dict:
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "source_device": device["source_device"],
         "location": device["location"],
+        "zone_id": device["location"],
         "details": device["details_fn"](),
     }
 
