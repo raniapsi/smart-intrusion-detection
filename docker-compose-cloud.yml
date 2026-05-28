@@ -65,16 +65,12 @@ services:
     - /bin/bash
     - -c
     command:
-    - "set -e\necho 'creating Kafka topics...'\nkafka-topics --bootstrap-server kafka:9092\
-      \ --create --if-not-exists \\\n  --topic events.raw --partitions 3 --replication-factor\
-      \ 1 \\\n  --config retention.ms=604800000\n\nkafka-topics --bootstrap-server\
-      \ kafka:9092 --create --if-not-exists \\\n  --topic events.enriched --partitions\
-      \ 3 --replication-factor 1 \\\n  --config retention.ms=2592000000\n\nkafka-topics\
-      \ --bootstrap-server kafka:9092 --create --if-not-exists \\\n  --topic alerts.critical\
-      \ --partitions 1 --replication-factor 1 \\\n  --config retention.ms=7776000000\n\
-      \nkafka-topics --bootstrap-server kafka:9092 --create --if-not-exists \\\n \
-      \ --topic logs.signed --partitions 1 --replication-factor 1 \\\n  --config retention.ms=473040000000\n\
-      \necho 'topics:' && kafka-topics --bootstrap-server kafka:9092 --list\n"
+      "echo 'Waiting for Kafka to be ready...' &&
+      cub kafka-ready -b kafka:9092 1 20 &&
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic events.raw &&
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic alerts.critical &&
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --partitions 3 --replication-factor 1 --topic events.enriched &&
+      echo 'Successfully created topics.'"
     restart: 'no'
     networks:
     - middleware-net
